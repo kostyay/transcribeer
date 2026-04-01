@@ -8,16 +8,89 @@ import time
 from pathlib import Path
 
 import AppKit
+import UserNotifications as UN
+import objc
 import rumps
 
 from transcribee.config import load
 
 # us.zoom.caphost only runs when a Zoom meeting is active (not just Zoom idle)
 _ZOOM_MEETING_BUNDLE = "us.zoom.caphost"
+_NOTIF_CATEGORY = "ZOOM_MEETING"
+_ACTION_RECORD = "record"
+_TICK_INTERVAL = 1      # seconds
+_ZOOM_POLL_EVERY = 5    # ticks
 
-_TICK_INTERVAL = 1       # seconds between timer ticks
-_ZOOM_POLL_EVERY = 5     # check Zoom every N ticks
 
+# ── Notification delegate ─────────────────────────────────────────────────────
+
+class _NotifDelegate(AppKit.NSObject):
+    """Routes UNUserNotification action taps back to the app."""
+
+    def init(self):
+        self = objc.super(_NotifDelegate, self).init()
+        self._on_record = None
+        return self
+
+    def userNotificationCenter_didReceiveNotificationResponse_withCompletionHandler_(
+        self, center, response, completionHandler
+    ):
+        identifier = str(response.actionIdentifier())
+        # Both explicit "record" action and clicking the banner body trigger recording
+        if identifier in (_ACTION_RECORD, "com.apple.UNNotificationDefaultActionIdentifier"):
+            if self._on_record:
+                self._on_record()
+        completionHandler()
+
+    def userNotificationCenter_willPresentNotification_withCompletionHandler_(
+        self, center, notification, completionHandler
+    ):
+        # Show banner even while the app is frontmost
+        completionHandler(UN.UNNotificationPresentationOptionBanner)
+
+
+def _setup_notifications(delegate: _NotifDelegate) -> None:
+    """Register notification category + actions and request permission."""
+    record_action = UN.UNNotificationAction.actionWithIdentifier_title_options_(
+        _ACTION_RECORD, "⏺ Start Recording", UN.UNNotificationActionOptionForeground
+    )
+    dismiss_action = UN.UNNotificationAction.actionWithIdentifier_title_options_(
+        "dismiss", "Dismiss", UN.UNNotificationActionOptions(0)
+    )
+    category = UN.UNNotificationCategory.categoryWithIdentifier_actions_intentIdentifiers_options_(
+        _NOTIF_CATEGORY, [record_action, dismiss_action], [],
+        UN.UNNotificationCategoryOptions(0),
+    )
+    center = UN.UNUserNotificationCenter.currentNotificationCenter()
+    center.setDelegate_(delegate)
+    center.setNotificationCategories_(AppKit.NSSet.setWithObject_(category))
+    center.requestAuthorizationWithOptions_completionHandler_(
+        UN.UNAuthorizationOptionAlert | UN.UNAuthorizationOptionSound,
+        None,
+    )
+
+
+def _send_zoom_notification() -> None:
+    content = UN.UNMutableNotificationContent.alloc().init()
+    content.setTitle_("Zoom meeting in progress")
+    content.setBody_("No recording active — want to record this meeting?")
+    content.setCategoryIdentifier_(_NOTIF_CATEGORY)
+
+    request = UN.UNNotificationRequest.requestWithIdentifier_content_trigger_(
+        "zoom_meeting", content, None  # None = deliver immediately
+    )
+    UN.UNUserNotificationCenter.currentNotificationCenter() \
+        .addNotificationRequest_withCompletionHandler_(request, None)
+
+
+def _cancel_zoom_notification() -> None:
+    UN.UNUserNotificationCenter.currentNotificationCenter() \
+        .removePendingNotificationRequestsWithIdentifiers_(["zoom_meeting"])
+    UN.UNUserNotificationCenter.currentNotificationCenter() \
+        .removeDeliveredNotificationsWithIdentifiers_(["zoom_meeting"])
+
+
+# ── App ───────────────────────────────────────────────────────────────────────
 
 class TranscribeeApp(rumps.App):
     def __init__(self):
@@ -28,27 +101,25 @@ class TranscribeeApp(rumps.App):
         self._capture_proc: subprocess.Popen | None = None
         self._sess: Path | None = None
         self._record_start: float | None = None
-
-        # Zoom tracking
         self._zoom_in_meeting = False
         self._tick_count = 0
 
-        # Pre-create all items with explicit callbacks — no @clicked magic
-        self._zoom_item = rumps.MenuItem(
-            "🎥 Zoom meeting detected — Record?", callback=self._on_zoom_record
-        )
+        # Notification delegate (must stay alive for the app lifetime)
+        self._notif_delegate = _NotifDelegate.alloc().init()
+        self._notif_delegate._on_record = self._on_start
+        _setup_notifications(self._notif_delegate)
+
+        # Menu items
         self._status_item = rumps.MenuItem("", callback=None)
         self._open_item = rumps.MenuItem("📁 Open Session Dir", callback=self._on_open)
         self._stop_item = rumps.MenuItem("⏹ Stop Recording", callback=self._on_stop)
         self._start_item = rumps.MenuItem("Start Recording", callback=self._on_start)
 
         self.menu = [
-            self._zoom_item,
-            None,  # separator (hidden when zoom_item hidden)
             self._status_item,
             self._open_item,
             self._stop_item,
-            None,  # separator
+            None,
             self._start_item,
         ]
 
@@ -56,61 +127,54 @@ class TranscribeeApp(rumps.App):
         self._timer.start()
 
         self._set_idle()
-        self._check_zoom()  # detect meeting already in progress at launch
+        self._check_zoom()  # handle meeting already running at launch
 
     # ── Timer ─────────────────────────────────────────────────────────────────
 
     def _tick(self, _timer):
         self._tick_count += 1
 
-        # Update elapsed time while recording
         if self._record_start is not None and self._capture_proc is not None:
             elapsed = int(time.time() - self._record_start)
             m, s = divmod(elapsed, 60)
             self._status_item.title = f"⏺ Recording  {m:02d}:{s:02d}"
 
-        # Poll Zoom meeting status every N seconds
         if self._tick_count % _ZOOM_POLL_EVERY == 0:
             self._check_zoom()
 
     def _check_zoom(self):
-        """Show/hide the Zoom suggestion based on us.zoom.caphost presence."""
         workspace = AppKit.NSWorkspace.sharedWorkspace()
         now_in_meeting = any(
             app.bundleIdentifier() == _ZOOM_MEETING_BUNDLE
             for app in workspace.runningApplications()
         )
-
         if now_in_meeting == self._zoom_in_meeting:
-            return  # no change
+            return
 
         self._zoom_in_meeting = now_in_meeting
         recording_active = self._thread is not None and self._thread.is_alive()
 
         if now_in_meeting and not recording_active:
-            self._zoom_item.hidden = False
+            _send_zoom_notification()
         else:
-            self._zoom_item.hidden = True
+            _cancel_zoom_notification()
 
     # ── Menu callbacks ────────────────────────────────────────────────────────
 
-    def _on_zoom_record(self, _):
-        self._zoom_item.hidden = True
-        self._on_start(None)
-
-    def _on_start(self, _):
+    def _on_start(self, _=None):
+        _cancel_zoom_notification()
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
-    def _on_stop(self, _):
+    def _on_stop(self, _=None):
         self._stop_event.set()
         proc = self._capture_proc
         if proc:
             proc.send_signal(signal.SIGINT)
-        self._stop_item.set_callback(None)  # prevent double-fire
+        self._stop_item.set_callback(None)
 
-    def _on_open(self, _):
+    def _on_open(self, _=None):
         if self._sess:
             subprocess.run(["open", str(self._sess)])
 
@@ -188,8 +252,6 @@ class TranscribeeApp(rumps.App):
         self._open_item.hidden = True
         self._stop_item.hidden = True
         self._start_item.hidden = False
-        # Zoom suggestion visible only if meeting is active
-        self._zoom_item.hidden = not self._zoom_in_meeting
 
     def _set_recording(self):
         self._record_start = time.time()
@@ -200,7 +262,6 @@ class TranscribeeApp(rumps.App):
         self._stop_item.hidden = False
         self._stop_item.set_callback(self._on_stop)
         self._start_item.hidden = True
-        self._zoom_item.hidden = True  # already accepted or manually started
 
     def _set_status(self, label: str):
         self.title = label.split()[0]
@@ -209,7 +270,6 @@ class TranscribeeApp(rumps.App):
         self._open_item.hidden = False
         self._stop_item.hidden = True
         self._start_item.hidden = True
-        self._zoom_item.hidden = True
 
     def _set_done(self):
         self.title = "✓"
@@ -218,7 +278,6 @@ class TranscribeeApp(rumps.App):
         self._open_item.hidden = False
         self._stop_item.hidden = True
         self._start_item.hidden = False
-        self._zoom_item.hidden = not self._zoom_in_meeting
         rumps.notification("Transcribee", "Done", str(self._sess), sound=False)
 
     def _set_error(self, msg: str):
@@ -228,7 +287,6 @@ class TranscribeeApp(rumps.App):
         self._open_item.hidden = self._sess is None
         self._stop_item.hidden = True
         self._start_item.hidden = False
-        self._zoom_item.hidden = not self._zoom_in_meeting
         rumps.alert(title="Transcribee Error", message=msg)
 
 
