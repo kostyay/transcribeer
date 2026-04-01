@@ -69,6 +69,13 @@ if let duration = autoDuration {
 }
 
 // ── 7. Start capture ─────────────────────────────────────────────────────────
+AudioCapture.shared.onStreamStopped = {
+    guard !stopped else { return }
+    stopped = true
+    shutdown()
+    exit(0)
+}
+
 fputs("Recording → \(outputPath)  (Ctrl+C to stop)\n", stderr)
 Task {
     do {

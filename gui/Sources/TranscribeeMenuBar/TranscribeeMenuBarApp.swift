@@ -16,7 +16,7 @@ struct TranscribeeMenuBarApp: App {
                 .environmentObject(watcher)
                 .onAppear {
                     NotificationManager.requestPermission()
-                    watcher.startWatching(runner: runner)
+                    watcher.setRunner(runner)
                 }
         }
         .menuBarExtraStyle(.menu)

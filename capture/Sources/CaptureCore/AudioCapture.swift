@@ -5,6 +5,8 @@ public class AudioCapture: NSObject {
     public static let shared = AudioCapture()
     public override init() {}
 
+    public var onStreamStopped: (() -> Void)?
+
     private var stream: SCStream?
     private var writer: WAVWriter?
 
@@ -50,7 +52,7 @@ public class AudioCapture: NSObject {
         config.height = 2
         config.minimumFrameInterval = CMTime(value: 1, timescale: 1)
 
-        let s = SCStream(filter: filter, configuration: config, delegate: nil)
+        let s = SCStream(filter: filter, configuration: config, delegate: self)
         try s.addStreamOutput(
             self, type: .audio,
             sampleHandlerQueue: DispatchQueue(label: "audio.capture"))
@@ -84,6 +86,14 @@ public class AudioCapture: NSObject {
 
 public enum CaptureError: Error {
     case noDisplay
+}
+
+extension AudioCapture: SCStreamDelegate {
+    public func stream(_ stream: SCStream, didStopWithError error: Error) {
+        // Stream was stopped externally (e.g. "Stop sharing" button)
+        stopAccepting()
+        onStreamStopped?()
+    }
 }
 
 extension AudioCapture: SCStreamOutput {

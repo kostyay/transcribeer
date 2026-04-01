@@ -3,6 +3,9 @@ import AppKit
 class AppWatcher: ObservableObject {
     @Published var activeMeetingApp: String? = nil
 
+    weak var runner: TranscribeeRunner?
+    private var observers: [NSObjectProtocol] = []
+
     private let watched: [String: String] = [
         "us.zoom.xos":          "Zoom",
         "com.microsoft.teams2": "Teams",
@@ -10,48 +13,51 @@ class AppWatcher: ObservableObject {
         "com.loom.desktop":     "Loom",
     ]
 
-    private var observers: [NSObjectProtocol] = []
+    init() {
+        setupObservers()
+        checkRunningApps()
+    }
 
-    func startWatching(runner: TranscribeeRunner) {
-        // Check already-running apps at launch
-        for app in NSWorkspace.shared.runningApplications {
-            if let id = app.bundleIdentifier, let name = watched[id] {
-                DispatchQueue.main.async { self.activeMeetingApp = name }
-                break
-            }
-        }
+    func setRunner(_ runner: TranscribeeRunner) {
+        self.runner = runner
+    }
 
+    private func setupObservers() {
         let nc = NSWorkspace.shared.notificationCenter
 
-        let launchObs = nc.addObserver(
+        observers.append(nc.addObserver(
             forName: NSWorkspace.didLaunchApplicationNotification,
-            object: nil,
-            queue: nil
+            object: nil, queue: .main
         ) { [weak self] note in
             guard let self,
                   let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-                  let id = app.bundleIdentifier,
-                  let name = self.watched[id] else { return }
-            DispatchQueue.main.async { self.activeMeetingApp = name }
-        }
+                  let bundleID = app.bundleIdentifier,
+                  let name = self.watched[bundleID] else { return }
+            self.activeMeetingApp = name
+        })
 
-        let terminateObs = nc.addObserver(
+        observers.append(nc.addObserver(
             forName: NSWorkspace.didTerminateApplicationNotification,
-            object: nil,
-            queue: nil
+            object: nil, queue: .main
         ) { [weak self] note in
             guard let self,
                   let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-                  let id = app.bundleIdentifier,
-                  self.watched[id] != nil else { return }
-            DispatchQueue.main.async {
-                self.activeMeetingApp = nil
-                if case .recording = runner.state {
-                    runner.stop()
-                }
+                  let bundleID = app.bundleIdentifier,
+                  self.watched[bundleID] != nil else { return }
+            self.activeMeetingApp = nil
+            // Auto-stop recording when meeting app quits
+            if let runner = self.runner, case .recording = runner.state {
+                runner.stop()
             }
-        }
+        })
+    }
 
-        observers = [launchObs, terminateObs]
+    private func checkRunningApps() {
+        for app in NSWorkspace.shared.runningApplications {
+            guard let bundleID = app.bundleIdentifier,
+                  let name = watched[bundleID] else { continue }
+            activeMeetingApp = name
+            break
+        }
     }
 }
