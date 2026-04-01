@@ -18,7 +18,14 @@ def _run_pyannote(wav_path: Path, num_speakers: int | None) -> list[tuple[float,
     import torchaudio
 
     pipeline = _load_pyannote_pipeline()
-    waveform, sample_rate = torchaudio.load(str(wav_path))
+    try:
+        waveform, sample_rate = torchaudio.load(str(wav_path))
+    except RuntimeError as e:
+        raise RuntimeError(
+            f"Failed to load audio for diarization: {wav_path}\n"
+            "The file may be empty or contain no audio frames. "
+            "Ensure the recording captured system audio."
+        ) from e
     kwargs = {}
     if num_speakers:
         kwargs["num_speakers"] = num_speakers
@@ -60,9 +67,23 @@ def _run_resemblyzer(wav_path: Path, num_speakers: int | None) -> list[tuple[flo
         timestamps.append(start_sample / sr)
 
     if not embeddings:
+        import warnings
+        warnings.warn(
+            "Audio is shorter than the resemblyzer window (1.5s) — no speaker segments produced.",
+            stacklevel=3,
+        )
         return []
 
-    n_clusters = num_speakers if num_speakers else 2
+    if num_speakers is None:
+        import warnings
+        warnings.warn(
+            "resemblyzer: num_speakers not set, defaulting to 2. "
+            "Pass --num-speakers for accurate results with non-2-speaker recordings.",
+            stacklevel=3,
+        )
+        n_clusters = 2
+    else:
+        n_clusters = num_speakers
     n_clusters = min(n_clusters, len(embeddings))
 
     labels = AgglomerativeClustering(n_clusters=n_clusters).fit_predict(embeddings)

@@ -10,6 +10,7 @@ def ensure_wav(audio_path: Path) -> Path:
         return audio_path
     wav_path = audio_path.with_suffix(".wav")
     if wav_path.exists():
+        print(f"Using existing WAV: {wav_path}")
         return wav_path
     subprocess.run(
         ["ffmpeg", "-i", str(audio_path), "-ar", "16000", "-ac", "1",
@@ -101,6 +102,14 @@ def run(
     from transcribee import diarize
 
     wav_path = ensure_wav(audio_path)
+
+    # WAV header alone is 44 bytes — anything smaller means no audio was captured.
+    if wav_path.stat().st_size <= 44:
+        raise ValueError(
+            f"Recording produced no audio ({wav_path.stat().st_size} bytes). "
+            "Check that 'Screen & System Audio Recording' is enabled in "
+            "System Settings → Privacy & Security and that system audio is playing."
+        )
 
     diar_segments = diarize.run(wav_path, backend=diarize_backend, num_speakers=num_speakers)
 

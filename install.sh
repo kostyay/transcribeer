@@ -47,6 +47,11 @@ ok "ffmpeg $(ffmpeg -version 2>&1 | head -1 | awk '{print $3}')"
 mkdir -p "$BIN_DIR"
 cp "$REPO_DIR/capture-bin" "$BIN_DIR/capture-bin"
 chmod +x "$BIN_DIR/capture-bin"
+# Sign with entitlements required by ScreenCaptureKit on macOS 14+
+ENTITLEMENTS="$REPO_DIR/capture/capture.entitlements.plist"
+if command -v codesign &>/dev/null && [[ -f "$ENTITLEMENTS" ]]; then
+  codesign --force --sign - --entitlements "$ENTITLEMENTS" "$BIN_DIR/capture-bin" 2>/dev/null || true
+fi
 ok "capture-bin installed → $BIN_DIR/capture-bin"
 
 # ── 5. Python venv ────────────────────────────────────────────────────────────
@@ -88,6 +93,7 @@ case "$(echo "$diar_choice" | tr '[:lower:]' '[:upper:]')" in
     read -r -p "  Paste your HF token: " hf_token
     mkdir -p "$HOME/.cache/huggingface"
     echo "$hf_token" > "$HOME/.cache/huggingface/token"
+    chmod 600 "$HOME/.cache/huggingface/token"
     # Validate
     http_code=$(curl -sf -o /dev/null -w "%{http_code}" \
       -H "Authorization: Bearer $hf_token" \
@@ -145,7 +151,12 @@ ln -sf "$VENV/bin/transcribee" "$LOCAL_BIN/transcribee"
 ok "Symlink: $LOCAL_BIN/transcribee → $VENV/bin/transcribee"
 
 if [[ ":$PATH:" != *":$LOCAL_BIN:"* ]]; then
-  SHELL_RC="$HOME/.zshrc"
+  case "$SHELL" in
+    */zsh)  SHELL_RC="$HOME/.zshrc" ;;
+    */bash) SHELL_RC="$HOME/.bashrc" ;;
+    */fish) SHELL_RC="$HOME/.config/fish/config.fish" ;;
+    *)      SHELL_RC="$HOME/.profile" ;;
+  esac
   echo "" >> "$SHELL_RC"
   echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$SHELL_RC"
   echo ""
