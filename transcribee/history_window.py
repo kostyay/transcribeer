@@ -23,7 +23,7 @@ def list_sessions(sessions_dir: Path) -> list[Path]:
         return []
     return sorted(
         (p for p in d.iterdir() if p.is_dir()),
-        key=lambda p: (p.name, p.stat().st_ctime),
+        key=lambda p: p.stat().st_ctime,
         reverse=True,
     )
 
