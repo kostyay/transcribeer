@@ -32,3 +32,14 @@ test-capture:
 # ── logs ──────────────────────────────────────────────────────────────────────
 logs:
 	log stream --predicate 'process == "Python" OR process == "capture-bin"' --level debug
+
+.PHONY: release
+release: ## Tag a release and update the Homebrew formula SHA
+	@if [ -z "$(VERSION)" ]; then echo "Usage: make release VERSION=0.1.0"; exit 1; fi
+	git tag -a v$(VERSION) -m "Release v$(VERSION)"
+	git archive --format=tar.gz --prefix=transcribeer-$(VERSION)/ v$(VERSION) | \
+	  shasum -a 256 | awk '{print $$1}' > /tmp/release-sha256.txt
+	@echo "SHA256: $$(cat /tmp/release-sha256.txt)"
+	@echo "Update Formula/transcribeer.rb:"
+	@echo "  url: https://github.com/moshebeladev/transcribeer/archive/refs/tags/v$(VERSION).tar.gz"
+	@echo "  sha256: $$(cat /tmp/release-sha256.txt)"
