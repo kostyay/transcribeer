@@ -104,7 +104,7 @@ def run(
         "diarizing" | "loading" | "transcribing" | "done" and fraction is
         0.0–1.0 during transcription, None otherwise.
     """
-    from transcribee import diarize
+    from transcribeer import diarize
 
     def _prog(step: str, pct: float | None = None) -> None:
         if on_progress:

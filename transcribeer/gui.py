@@ -12,8 +12,8 @@ import UserNotifications as UN
 import objc
 import rumps
 
-from transcribee.config import load
-from transcribee.settings_window import SettingsWindowController
+from transcribeer.config import load
+from transcribeer.settings_window import SettingsWindowController
 
 
 def _load_shell_env() -> None:
@@ -116,7 +116,7 @@ def _cancel_zoom_notification() -> None:
 
 # ── App ───────────────────────────────────────────────────────────────────────
 
-class TranscribeeApp(rumps.App):
+class TranscribeerApp(rumps.App):
     def __init__(self):
         super().__init__("🎙", quit_button="Quit")
         self.cfg = load()
@@ -202,13 +202,13 @@ class TranscribeeApp(rumps.App):
         self._settings_ctrl.show()
 
     def _on_history(self, _=None):
-        from transcribee.history_window import HistoryWindow
+        from transcribeer.history_window import HistoryWindow
         if self._history_window is None:
             self._history_window = HistoryWindow(self.cfg)
         self._history_window.show()
 
     def _on_start(self, _=None):
-        from transcribee import session
+        from transcribeer import session
         _cancel_zoom_notification()
         self._stop_event.clear()
         sess = session.new_session(self.cfg.sessions_dir)
@@ -219,7 +219,7 @@ class TranscribeeApp(rumps.App):
     def _on_rename(self, _=None):
         if self._sess is None:
             return
-        from transcribee.meta import read_meta, set_name
+        from transcribeer.meta import read_meta, set_name
         current = read_meta(self._sess).get("name", "")
         win = rumps.Window(
             message="Supports any language, including Hebrew (עברית) and special characters:",
@@ -239,7 +239,7 @@ class TranscribeeApp(rumps.App):
         if self._sess is None:
             self._rename_item.title = "✏️ Rename Session…"
             return
-        from transcribee.meta import read_meta
+        from transcribeer.meta import read_meta
         name = read_meta(self._sess).get("name", "")
         self._rename_item.title = f"✏️ {name}" if name else "✏️ Rename Session…"
 
@@ -257,7 +257,7 @@ class TranscribeeApp(rumps.App):
     # ── Pipeline (background thread) ─────────────────────────────────────────
 
     def _run(self, sess: Path):
-        from transcribee import transcribe as tx, summarize as sm
+        from transcribeer import transcribe as tx, summarize as sm
 
         cfg = self.cfg
         audio_path = sess / "audio.wav"
@@ -359,7 +359,7 @@ class TranscribeeApp(rumps.App):
         self._start_item.hidden = True
 
     def _set_done(self, summary_err: str | None = None):
-        from transcribee.meta import get_display_name
+        from transcribeer.meta import get_display_name
         self.title = "✓"
         display = get_display_name(self._sess) if self._sess else ""
         if summary_err:
@@ -383,12 +383,14 @@ class TranscribeeApp(rumps.App):
         self._rename_item.hidden = True
         self._stop_item.hidden = True
         self._start_item.hidden = False
-        rumps.alert(title="Transcribee Error", message=msg)
+        AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(
+            lambda: rumps.alert(title="Transcribeer Error", message=msg)
+        )
 
 
 def main():
     _load_shell_env()
-    TranscribeeApp().run()
+    TranscribeerApp().run()
 
 
 if __name__ == "__main__":

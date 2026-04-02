@@ -10,7 +10,7 @@ def new_session(sessions_dir: Path | None = None) -> Path:
     Returns the created path.
     """
     if sessions_dir is None:
-        from transcribee.config import load
+        from transcribeer.config import load
         sessions_dir = load().sessions_dir
 
     sessions_dir = Path(sessions_dir)
@@ -30,7 +30,7 @@ def new_session(sessions_dir: Path | None = None) -> Path:
 def latest_session(sessions_dir: Path | None = None) -> Path | None:
     """Return the most recently created session dir, or None."""
     if sessions_dir is None:
-        from transcribee.config import load
+        from transcribeer.config import load
         sessions_dir = load().sessions_dir
 
     sessions_dir = Path(sessions_dir)

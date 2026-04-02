@@ -5,7 +5,7 @@ import pytest
 
 
 def _make_config(tmp_path):
-    from transcribee.config import Config
+    from transcribeer.config import Config
     return Config(
         language="auto",
         diarization="none",
@@ -29,7 +29,7 @@ def test_record_builds_positional_args(tmp_path):
     mock_proc.returncode = 0
 
     with patch("subprocess.Popen", return_value=mock_proc) as mock_popen:
-        from transcribee.capture import record
+        from transcribeer.capture import record
         record(out_path=out, duration=60, pid_file=None, config=cfg)
 
     cmd = mock_popen.call_args[0][0]
@@ -49,7 +49,7 @@ def test_record_no_duration_omits_third_arg(tmp_path):
     mock_proc.returncode = 0
 
     with patch("subprocess.Popen", return_value=mock_proc) as mock_popen:
-        from transcribee.capture import record
+        from transcribeer.capture import record
         record(out_path=out, duration=None, pid_file=None, config=cfg)
 
     cmd = mock_popen.call_args[0][0]
@@ -68,7 +68,7 @@ def test_record_writes_pidfile(tmp_path):
     mock_proc.returncode = 0
 
     with patch("subprocess.Popen", return_value=mock_proc):
-        from transcribee.capture import record
+        from transcribeer.capture import record
         record(out_path=out, duration=None, pid_file=pid_file, config=cfg)
 
     assert pid_file.read_text() == "9999"
@@ -88,7 +88,7 @@ def test_permission_error_raised_on_scstream_denial(tmp_path):
     mock_proc.returncode = 1
 
     with patch("subprocess.Popen", return_value=mock_proc):
-        from transcribee.capture import record
+        from transcribeer.capture import record
         with pytest.raises(PermissionError, match="Screen & System Audio Recording"):
             record(out_path=out, duration=None, pid_file=None, config=cfg)
 
@@ -99,6 +99,6 @@ def test_capture_bin_not_found_raises(tmp_path):
     out = tmp_path / "audio.wav"
 
     with patch("subprocess.Popen", side_effect=FileNotFoundError):
-        from transcribee.capture import record
+        from transcribeer.capture import record
         with pytest.raises(FileNotFoundError):
             record(out_path=out, duration=None, pid_file=None, config=cfg)

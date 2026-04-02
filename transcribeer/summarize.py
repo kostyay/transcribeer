@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 
-from transcribee.keychain import get_api_key as _kc_get
+from transcribeer.keychain import get_api_key as _kc_get
 
 SYSTEM_PROMPT = """You are a meeting summarizer. Given a meeting transcript with speaker labels and timestamps, produce a concise summary in the same language as the transcript. Include:
 - 2-3 sentence overview

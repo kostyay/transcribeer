@@ -1,9 +1,9 @@
 """Settings window — WKWebView-based."""
 from __future__ import annotations
 
-from transcribee import config as cfg_mod
-from transcribee.keychain import get_api_key, set_api_key
-from transcribee.webview_window import WebViewWindow
+from transcribeer import config as cfg_mod
+from transcribeer.keychain import get_api_key, set_api_key
+from transcribeer.webview_window import WebViewWindow
 
 _W, _H = 480, 520
 
@@ -14,7 +14,7 @@ class SettingsWindowController(WebViewWindow):
     def __init__(self, app):
         super().__init__(
             html_name="settings",
-            title="Transcribee Settings",
+            title="Transcribeer Settings",
             width=_W,
             height=_H,
             resizable=False,

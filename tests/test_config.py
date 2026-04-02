@@ -13,7 +13,7 @@ def write_config(tmp_path: Path, content: str) -> Path:
 def test_load_defaults(monkeypatch, tmp_path):
     """Missing config file → all defaults applied."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    from transcribee.config import load, Config
+    from transcribeer.config import load, Config
     cfg = load()
     assert cfg.language == "auto"
     assert cfg.diarization == "resemblyzer"
@@ -25,35 +25,35 @@ def test_load_defaults(monkeypatch, tmp_path):
 
 def test_load_custom_language(monkeypatch, tmp_path):
     """Explicit language value is loaded."""
-    cfg_dir = tmp_path / ".transcribee"
+    cfg_dir = tmp_path / ".transcribeer"
     cfg_dir.mkdir()
     (cfg_dir / "config.toml").write_text('[transcription]\nlanguage = "he"\n')
     monkeypatch.setenv("HOME", str(tmp_path))
-    from transcribee import config as cfg_mod
+    from transcribeer import config as cfg_mod
     import importlib; importlib.reload(cfg_mod)
-    from transcribee.config import load
+    from transcribeer.config import load
     cfg = load()
     assert cfg.language == "he"
 
 
 def test_num_speakers_zero_becomes_none(monkeypatch, tmp_path):
     """num_speakers = 0 in TOML → None in Config."""
-    cfg_dir = tmp_path / ".transcribee"
+    cfg_dir = tmp_path / ".transcribeer"
     cfg_dir.mkdir()
     (cfg_dir / "config.toml").write_text('[transcription]\nnum_speakers = 0\n')
     monkeypatch.setenv("HOME", str(tmp_path))
-    from transcribee.config import load
+    from transcribeer.config import load
     cfg = load()
     assert cfg.num_speakers is None
 
 
 def test_num_speakers_nonzero(monkeypatch, tmp_path):
     """num_speakers = 2 in TOML → 2 in Config."""
-    cfg_dir = tmp_path / ".transcribee"
+    cfg_dir = tmp_path / ".transcribeer"
     cfg_dir.mkdir()
     (cfg_dir / "config.toml").write_text('[transcription]\nnum_speakers = 2\n')
     monkeypatch.setenv("HOME", str(tmp_path))
-    from transcribee.config import load
+    from transcribeer.config import load
     cfg = load()
     assert cfg.num_speakers == 2
 
@@ -61,7 +61,7 @@ def test_num_speakers_nonzero(monkeypatch, tmp_path):
 def test_paths_expanded(monkeypatch, tmp_path):
     """~ in path values is expanded."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    from transcribee.config import load
+    from transcribeer.config import load
     cfg = load()
     assert not str(cfg.sessions_dir).startswith("~")
     assert not str(cfg.capture_bin).startswith("~")

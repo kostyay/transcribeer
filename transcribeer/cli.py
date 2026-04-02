@@ -7,7 +7,7 @@ import typer
 from rich.console import Console
 
 app = typer.Typer(
-    name="transcribee",
+    name="transcribeer",
     help="Audio capture, transcription, and summarization.",
     add_completion=False,
 )
@@ -15,7 +15,7 @@ console = Console()
 
 
 def _cfg():
-    from transcribee.config import load
+    from transcribeer.config import load
     return load()
 
 
@@ -26,7 +26,7 @@ def record(
     pid_file: Optional[Path] = typer.Option(None, "--pid-file", help="Write PID here for external stop (e.g. GUI)."),
 ):
     """Capture system audio to a WAV file."""
-    from transcribee import capture, session
+    from transcribeer import capture, session
     cfg = _cfg()
 
     if out is None:
@@ -60,7 +60,7 @@ def transcribe(
     out: Optional[Path] = typer.Option(None, "--out", "-o", help="Output .txt path."),
 ):
     """Transcribe an audio file with speaker diarization."""
-    from transcribee import transcribe as tx
+    from transcribeer import transcribe as tx
     cfg = _cfg()
 
     language = lang or cfg.language
@@ -97,7 +97,7 @@ def summarize(
     backend: Optional[str] = typer.Option(None, "--backend", help="LLM backend: openai, anthropic, ollama."),
 ):
     """Summarize a transcript using an LLM."""
-    from transcribee import summarize as sm
+    from transcribeer import summarize as sm
     cfg = _cfg()
 
     llm_backend = backend or cfg.llm_backend
@@ -131,7 +131,7 @@ def run(
     no_summarize: bool = typer.Option(False, "--no-summarize"),
 ):
     """Record → transcribe → summarize in one shot."""
-    from transcribee import capture, transcribe as tx, summarize as sm, session
+    from transcribeer import capture, transcribe as tx, summarize as sm, session
     cfg = _cfg()
 
     sess = session.new_session(sessions_dir=cfg.sessions_dir)

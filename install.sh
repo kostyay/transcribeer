@@ -1,7 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TRANSCRIBEE_DIR="$HOME/.transcribee"
+# Non-interactive mode (used by Homebrew formula)
+NONINTERACTIVE="${TRANSCRIBEER_NONINTERACTIVE:-0}"
+
+ask_yn() {
+  local prompt="$1" default="${2:-N}"
+  if [[ "$NONINTERACTIVE" == "1" ]]; then
+    [[ "$default" == "Y" ]] && return 0 || return 1
+  fi
+  read -r -p "$prompt" yn
+  [[ "$yn" =~ ^[Yy]$ ]]
+}
+
+TRANSCRIBEE_DIR="$HOME/.transcribeer"
 BIN_DIR="$TRANSCRIBEE_DIR/bin"
 VENV="$TRANSCRIBEE_DIR/venv"
 LOCAL_BIN="$HOME/.local/bin"
@@ -11,7 +23,7 @@ ok()   { echo "[✓] $*"; }
 fail() { echo "[✗] $*" >&2; exit 1; }
 info() { echo "    $*"; }
 
-echo "=== Transcribee Installer ==="
+echo "=== Transcribeer Installer ==="
 echo ""
 
 # ── 1. macOS version ──────────────────────────────────────────────────────────
@@ -34,9 +46,11 @@ fi
 if ! command -v ffmpeg &>/dev/null; then
   echo "[!] ffmpeg not found."
   if command -v brew &>/dev/null; then
-    read -r -p "    Install via Homebrew? [y/N] " yn
-    [[ "$yn" =~ ^[Yy]$ ]] || fail "ffmpeg is required. Install with: brew install ffmpeg"
-    brew install ffmpeg
+    if ask_yn "    Install via Homebrew? [y/N] "; then
+      brew install ffmpeg
+    else
+      fail "ffmpeg is required. Install with: brew install ffmpeg"
+    fi
   else
     fail "ffmpeg is required. Install with: brew install ffmpeg"
   fi
@@ -76,30 +90,40 @@ echo "  (A) pyannote    — best quality, requires HuggingFace account"
 echo "  (B) resemblyzer — no account needed, good quality"
 echo "  (N) none        — no speaker labels, fastest"
 echo ""
-read -r -p "Choice [A/B/N]: " diar_choice
+
+if [[ "$NONINTERACTIVE" == "1" ]]; then
+  diar_choice="B"
+  echo "    [non-interactive] defaulting to resemblyzer"
+else
+  read -r -p "Choice [A/B/N]: " diar_choice
+fi
 
 DIARIZATION="none"
 case "$(echo "$diar_choice" | tr '[:lower:]' '[:upper:]')" in
   A)
     uv pip install -q pyannote.audio
     DIARIZATION="pyannote"
-    echo ""
-    echo "  HuggingFace token needed."
-    echo "  1. Create account at https://huggingface.co"
-    echo "  2. Accept model terms at https://huggingface.co/ivrit-ai/pyannote-speaker-diarization-3.1"
-    echo "  3. Create a token at https://huggingface.co/settings/tokens (read permission)"
-    echo ""
-    read -r -p "  Paste your HF token: " hf_token
-    mkdir -p "$HOME/.cache/huggingface"
-    echo "$hf_token" > "$HOME/.cache/huggingface/token"
-    chmod 600 "$HOME/.cache/huggingface/token"
-    http_code=$(curl -sf -o /dev/null -w "%{http_code}" \
-      -H "Authorization: Bearer $hf_token" \
-      "https://huggingface.co/api/whoami" || echo "000")
-    if [[ "$http_code" == "200" ]]; then
-      ok "HuggingFace token valid"
+    if [[ "$NONINTERACTIVE" != "1" ]]; then
+      echo ""
+      echo "  HuggingFace token needed."
+      echo "  1. Create account at https://huggingface.co"
+      echo "  2. Accept model terms: https://huggingface.co/ivrit-ai/pyannote-speaker-diarization-3.1"
+      echo "  3. Create a token at https://huggingface.co/settings/tokens (read permission)"
+      echo ""
+      read -r -p "  Paste your HF token: " hf_token
+      mkdir -p "$HOME/.cache/huggingface"
+      echo "$hf_token" > "$HOME/.cache/huggingface/token"
+      chmod 600 "$HOME/.cache/huggingface/token"
+      http_code=$(curl -sf -o /dev/null -w "%{http_code}" \
+        -H "Authorization: Bearer $hf_token" \
+        "https://huggingface.co/api/whoami" || echo "000")
+      if [[ "$http_code" == "200" ]]; then
+        ok "HuggingFace token valid"
+      else
+        echo "[!] Token validation returned HTTP $http_code — continuing anyway."
+      fi
     else
-      echo "[!] Token validation returned HTTP $http_code — continuing anyway."
+      echo "    [non-interactive] pyannote selected but HF token not set — run: transcribeer config"
     fi
     ;;
   B)
@@ -113,9 +137,9 @@ case "$(echo "$diar_choice" | tr '[:lower:]' '[:upper:]')" in
     ;;
 esac
 
-# ── 7. Install transcribee package ───────────────────────────────────────────
+# ── 7. Install transcribeer package ───────────────────────────────────────────
 uv pip install -q -e "$REPO_DIR[gui]"
-ok "transcribee package installed"
+ok "transcribeer package installed"
 
 # ── 8. Write config ───────────────────────────────────────────────────────────
 mkdir -p "$TRANSCRIBEE_DIR/sessions"
@@ -134,8 +158,8 @@ model = "llama3"
 ollama_host = "http://localhost:11434"
 
 [paths]
-sessions_dir = "~/.transcribee/sessions"
-capture_bin = "~/.transcribee/bin/capture-bin"
+sessions_dir = "~/.transcribeer/sessions"
+capture_bin = "~/.transcribeer/bin/capture-bin"
 TOML
   ok "Config written → $CONFIG_FILE"
 else
@@ -144,9 +168,9 @@ fi
 
 # ── 9. PATH setup ─────────────────────────────────────────────────────────────
 mkdir -p "$LOCAL_BIN"
-ln -sf "$VENV/bin/transcribee" "$LOCAL_BIN/transcribee"
-ln -sf "$VENV/bin/transcribee-gui" "$LOCAL_BIN/transcribee-gui"
-ok "Symlinks → $LOCAL_BIN/{transcribee,transcribee-gui}"
+ln -sf "$VENV/bin/transcribeer" "$LOCAL_BIN/transcribeer"
+ln -sf "$VENV/bin/transcribeer-gui" "$LOCAL_BIN/transcribeer-gui"
+ok "Symlinks → $LOCAL_BIN/{transcribeer,transcribeer-gui}"
 
 if [[ ":$PATH:" != *":$LOCAL_BIN:"* ]]; then
   case "$SHELL" in
@@ -166,9 +190,9 @@ echo ""
 echo "=== Installation complete ==="
 echo ""
 echo "Usage:"
-echo "  transcribee-gui                   # launch menubar app"
-echo "  transcribee run --duration 300    # record 5 min, transcribe, summarize (CLI)"
-echo "  transcribee record                # record until Ctrl+C"
-echo "  transcribee transcribe audio.wav  # transcribe existing file"
-echo "  transcribee --help                # all commands"
+echo "  transcribeer-gui                   # launch menubar app"
+echo "  transcribeer run --duration 300    # record 5 min, transcribe, summarize (CLI)"
+echo "  transcribeer record                # record until Ctrl+C"
+echo "  transcribeer transcribe audio.wav  # transcribe existing file"
+echo "  transcribeer --help                # all commands"
 echo ""

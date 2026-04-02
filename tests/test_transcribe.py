@@ -7,7 +7,7 @@ import pytest
 
 def test_assign_speakers_overlap():
     """Whisper segment overlapping a diarization segment gets that speaker."""
-    from transcribee.transcribe import assign_speakers
+    from transcribeer.transcribe import assign_speakers
     whisper = [(0.0, 2.0, "hello world")]
     diarization = [(0.0, 3.0, "SPEAKER_00")]
     result = assign_speakers(whisper, diarization)
@@ -16,7 +16,7 @@ def test_assign_speakers_overlap():
 
 def test_assign_speakers_no_diarization():
     """Empty diarization → all segments labeled UNKNOWN."""
-    from transcribee.transcribe import assign_speakers
+    from transcribeer.transcribe import assign_speakers
     whisper = [(0.0, 2.0, "hello")]
     result = assign_speakers(whisper, [])
     assert result[0][2] == "UNKNOWN"
@@ -24,7 +24,7 @@ def test_assign_speakers_no_diarization():
 
 def test_assign_speakers_midpoint_fallback():
     """Uses midpoint when no overlap found."""
-    from transcribee.transcribe import assign_speakers
+    from transcribeer.transcribe import assign_speakers
     whisper = [(0.0, 1.0, "hi")]
     diarization = [(0.4, 0.8, "SPEAKER_01")]
     result = assign_speakers(whisper, diarization)
@@ -33,7 +33,7 @@ def test_assign_speakers_midpoint_fallback():
 
 def test_format_output_merges_consecutive_same_speaker():
     """Consecutive segments from same speaker are merged."""
-    from transcribee.transcribe import format_output
+    from transcribeer.transcribe import format_output
     labeled = [
         (0.0, 1.0, "SPEAKER_00", "hello"),
         (1.0, 2.0, "SPEAKER_00", "world"),
@@ -48,12 +48,12 @@ def test_format_output_merges_consecutive_same_speaker():
 
 
 def test_format_output_empty():
-    from transcribee.transcribe import format_output
+    from transcribeer.transcribe import format_output
     assert format_output([]) == ""
 
 
 def test_format_timestamp():
-    from transcribee.transcribe import format_timestamp
+    from transcribeer.transcribe import format_timestamp
     assert format_timestamp(65.0) == "01:05"
     assert format_timestamp(0.0) == "00:00"
 
@@ -76,11 +76,11 @@ def test_language_auto_maps_to_none():
     mock_model = MagicMock()
     mock_model.transcribe.return_value = ([mock_seg], mock_info)
 
-    with patch("transcribee.transcribe._load_whisper_model", return_value=mock_model), \
-         patch("transcribee.diarize.run", return_value=[]), \
-         patch("transcribee.transcribe.ensure_wav", return_value=wav):
+    with patch("transcribeer.transcribe._load_whisper_model", return_value=mock_model), \
+         patch("transcribeer.diarize.run", return_value=[]), \
+         patch("transcribeer.transcribe.ensure_wav", return_value=wav):
 
-        from transcribee.transcribe import run
+        from transcribeer.transcribe import run
         run(wav, language="auto", diarize_backend="none", num_speakers=None, out_path=tmp / "out.txt")
 
     call_kwargs = mock_model.transcribe.call_args

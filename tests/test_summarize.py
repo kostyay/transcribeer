@@ -14,7 +14,7 @@ def test_openai_backend_returns_string(monkeypatch):
     mock_openai.OpenAI.return_value = mock_client
     monkeypatch.setitem(sys.modules, "openai", mock_openai)
 
-    from transcribee.summarize import run
+    from transcribeer.summarize import run
     result = run("Speaker 1: hello", backend="openai", model="gpt-4o-mini")
 
     assert "Summary" in result
@@ -32,7 +32,7 @@ def test_anthropic_backend_returns_string(monkeypatch):
     mock_anthropic.Anthropic.return_value = mock_client
     monkeypatch.setitem(sys.modules, "anthropic", mock_anthropic)
 
-    from transcribee.summarize import run
+    from transcribeer.summarize import run
     result = run("Speaker 1: hello", backend="anthropic", model="claude-3-5-haiku-20241022")
 
     assert isinstance(result, str)
@@ -46,7 +46,7 @@ def test_ollama_backend_returns_string():
 
     from unittest.mock import patch
     with patch("requests.post", return_value=mock_resp):
-        from transcribee.summarize import run
+        from transcribeer.summarize import run
         result = run(
             "Speaker 1: hello",
             backend="ollama",
@@ -59,20 +59,20 @@ def test_ollama_backend_returns_string():
 
 def test_openai_missing_key_raises(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    from transcribee.summarize import run
+    from transcribeer.summarize import run
     with pytest.raises(ValueError, match="OPENAI_API_KEY"):
         run("transcript", backend="openai", model="gpt-4o-mini")
 
 
 def test_anthropic_missing_key_raises(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    from transcribee.summarize import run
+    from transcribeer.summarize import run
     with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
         run("transcript", backend="anthropic", model="claude-3-5-haiku-20241022")
 
 
 def test_unknown_backend_raises():
-    from transcribee.summarize import run
+    from transcribeer.summarize import run
     with pytest.raises(ValueError, match="Unknown summarization backend"):
         run("transcript", backend="magic", model="x")
 
@@ -86,7 +86,7 @@ def test_prompt_contains_transcript():
 
     from unittest.mock import patch
     with patch("requests.post", return_value=mock_resp) as mock_post:
-        from transcribee.summarize import run
+        from transcribeer.summarize import run
         run(transcript, backend="ollama", model="llama3")
 
     call_body = mock_post.call_args.kwargs["json"]

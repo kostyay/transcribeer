@@ -7,11 +7,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from transcribee.meta import get_display_name, read_meta, write_meta, set_notes
-from transcribee.webview_window import WebViewWindow
+from transcribeer.meta import get_display_name, read_meta, write_meta, set_notes
+from transcribeer.webview_window import WebViewWindow
 
 if TYPE_CHECKING:
-    from transcribee.config import Config
+    from transcribeer.config import Config
 
 
 # ── Pure helpers (tested) ─────────────────────────────────────────────────────
@@ -157,7 +157,7 @@ class HistoryWindow(WebViewWindow):
         return [r for r in rows if query in r["name"].lower()]
 
     def _run_transcribe(self, sess: Path):
-        from transcribee import transcribe as tx
+        from transcribeer import transcribe as tx
 
         def _prog(step, pct=None):
             self.send("progress", {"label": f"Transcribing: {step}", "pct": pct})
@@ -177,7 +177,7 @@ class HistoryWindow(WebViewWindow):
         self.send("done", {"step": "transcribe"})
 
     def _run_summarize(self, sess: Path):
-        from transcribee import summarize as sm
+        from transcribeer import summarize as sm
 
         self.send("progress", {"label": "Summarizing…", "pct": None})
         try:

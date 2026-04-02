@@ -7,7 +7,7 @@ import pytest
 def test_none_backend_returns_empty_list(tmp_path):
     wav = tmp_path / "audio.wav"
     wav.write_bytes(b"")
-    from transcribee.diarize import run
+    from transcribeer.diarize import run
     result = run(wav, backend="none")
     assert result == []
 
@@ -15,7 +15,7 @@ def test_none_backend_returns_empty_list(tmp_path):
 def test_unknown_backend_raises(tmp_path):
     wav = tmp_path / "audio.wav"
     wav.write_bytes(b"")
-    from transcribee.diarize import run
+    from transcribeer.diarize import run
     with pytest.raises(ValueError, match="Unknown diarization backend"):
         run(wav, backend="invalid_backend")
 
@@ -41,9 +41,9 @@ def test_pyannote_backend_returns_tuples(tmp_path):
     mock_sample_rate = 16000
 
     from unittest.mock import patch
-    with patch("transcribee.diarize._load_pyannote_pipeline", return_value=mock_pipeline), \
+    with patch("transcribeer.diarize._load_pyannote_pipeline", return_value=mock_pipeline), \
          patch("torchaudio.load", return_value=(mock_waveform, mock_sample_rate)):
-        from transcribee.diarize import run
+        from transcribeer.diarize import run
         result = run(wav, backend="pyannote")
 
     assert len(result) == 1
@@ -78,7 +78,7 @@ def test_resemblyzer_backend_returns_tuples(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "sklearn", MagicMock())
     monkeypatch.setitem(sys.modules, "sklearn.cluster", mock_sklearn_cluster)
 
-    from transcribee.diarize import run
+    from transcribeer.diarize import run
     result = run(wav, backend="resemblyzer", num_speakers=2)
 
     assert len(result) > 0

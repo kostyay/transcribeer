@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import subprocess
 
-_SERVICE_PREFIX = "transcribee"
+_SERVICE_PREFIX = "transcribeer"
 
 
 def _service(backend: str) -> str:

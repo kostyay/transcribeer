@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from transcribee.config import Config
+from transcribeer.config import Config
 
 
 def record(
@@ -29,7 +29,7 @@ def record(
         RuntimeError: any other non-zero exit
     """
     if config is None:
-        from transcribee.config import load
+        from transcribeer.config import load
         config = load()
 
     cmd = [str(config.capture_bin), str(out_path)]

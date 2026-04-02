@@ -4,8 +4,18 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+def _resolve_capture_bin(configured: Path) -> Path:
+    """Fall back to old ~/.transcribee path during migration."""
+    if configured.exists():
+        return configured
+    old = Path.home() / ".transcribee" / "bin" / "capture-bin"
+    if old.exists():
+        return old
+    return configured  # preserve original so the error message shows the right path
+
+
 def _config_path() -> Path:
-    return Path.home() / ".transcribee" / "config.toml"
+    return Path.home() / ".transcribeer" / "config.toml"
 
 _DEFAULTS = {
     "transcription": {
@@ -19,8 +29,8 @@ _DEFAULTS = {
         "ollama_host": "http://localhost:11434",
     },
     "paths": {
-        "sessions_dir": "~/.transcribee/sessions",
-        "capture_bin": "~/.transcribee/bin/capture-bin",
+        "sessions_dir": "~/.transcribeer/sessions",
+        "capture_bin": "~/.transcribeer/bin/capture-bin",
     },
     "pipeline": {
         "mode": "record+transcribe+summarize",
@@ -48,7 +58,7 @@ class Config:
 
 
 def load() -> Config:
-    """Load ~/.transcribee/config.toml. Missing keys use defaults. Never raises."""
+    """Load ~/.transcribeer/config.toml. Missing keys use defaults. Never raises."""
     data: dict = {}
     cfg_path = _config_path()
     if cfg_path.exists():
@@ -69,13 +79,13 @@ def load() -> Config:
         llm_model=get("summarization", "model"),
         ollama_host=get("summarization", "ollama_host"),
         sessions_dir=Path(get("paths", "sessions_dir")).expanduser(),
-        capture_bin=Path(get("paths", "capture_bin")).expanduser(),
+        capture_bin=_resolve_capture_bin(Path(get("paths", "capture_bin")).expanduser()),
         pipeline_mode=get("pipeline", "mode"),
     )
 
 
 def save(cfg: Config) -> None:
-    """Write cfg back to ~/.transcribee/config.toml (creates dirs as needed)."""
+    """Write cfg back to ~/.transcribeer/config.toml (creates dirs as needed)."""
     cfg_path = _config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
 
