@@ -118,9 +118,7 @@ def _cancel_zoom_notification() -> None:
 
 class TranscribeerApp(rumps.App):
     def __init__(self):
-        _icon_path = Path(__file__).parent.parent / "assets" / "logo.png"
-        _icon = str(_icon_path) if _icon_path.exists() else None
-        super().__init__("🍺", quit_button="Quit", icon=_icon, template=False)
+        super().__init__("🎙", quit_button="Quit")
         self.cfg = load()
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
@@ -385,7 +383,9 @@ class TranscribeerApp(rumps.App):
         self._rename_item.hidden = True
         self._stop_item.hidden = True
         self._start_item.hidden = False
-        rumps.alert(title="Transcribeer Error", message=msg)
+        AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(
+            lambda: rumps.alert(title="Transcribeer Error", message=msg)
+        )
 
 
 def main():

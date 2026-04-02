@@ -4,6 +4,16 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+def _resolve_capture_bin(configured: Path) -> Path:
+    """Fall back to old ~/.transcribee path during migration."""
+    if configured.exists():
+        return configured
+    old = Path.home() / ".transcribee" / "bin" / "capture-bin"
+    if old.exists():
+        return old
+    return configured  # preserve original so the error message shows the right path
+
+
 def _config_path() -> Path:
     return Path.home() / ".transcribeer" / "config.toml"
 
@@ -69,7 +79,7 @@ def load() -> Config:
         llm_model=get("summarization", "model"),
         ollama_host=get("summarization", "ollama_host"),
         sessions_dir=Path(get("paths", "sessions_dir")).expanduser(),
-        capture_bin=Path(get("paths", "capture_bin")).expanduser(),
+        capture_bin=_resolve_capture_bin(Path(get("paths", "capture_bin")).expanduser()),
         pipeline_mode=get("pipeline", "mode"),
     )
 
