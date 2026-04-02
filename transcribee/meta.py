@@ -41,3 +41,10 @@ def set_tags(session_dir: Path, tags: list[str]) -> None:
     data = read_meta(session_dir)
     data["tags"] = tags
     write_meta(session_dir, data)
+
+
+def set_notes(session_dir: Path, notes: str) -> None:
+    """Set the notes field, preserving other fields."""
+    data = read_meta(session_dir)
+    data["notes"] = notes
+    write_meta(session_dir, data)
