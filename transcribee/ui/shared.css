@@ -12,6 +12,7 @@
   --border-subtle: #f0f0f0;
   --radius:      8px;
   --font:        -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  --label-col:   122px;  /* label min-width (110px) + form-row gap (12px) */
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -98,7 +99,7 @@ input, textarea, button, select {
   font-size: 11px;
   color: var(--fg-secondary);
   margin-top: 3px;
-  padding-left: 122px;
+  padding-left: var(--label-col);
 }
 
 /* ── Section header ── */

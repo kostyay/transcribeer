@@ -22,6 +22,8 @@ from WebKit import (
 
 _UI_DIR = Path(__file__).parent / "ui"
 
+_FLEXIBLE = 18  # NSViewWidthSizable | NSViewHeightSizable
+
 
 class _BridgeHandler(NSObject):
     """Routes JS → Python messages."""
@@ -36,7 +38,9 @@ class _BridgeHandler(NSObject):
         try:
             action = str(body["action"])
             payload = dict(body.get("payload") or {})
-        except Exception:
+        except Exception as e:
+            import logging
+            logging.warning("webview bridge: malformed message %r: %s", body, e)
             return
         self._callback(action, payload)
 
@@ -55,8 +59,14 @@ class _NavDelegate(NSObject):
 
 
 class _WinDelegate(NSObject):
+    def initWithCallback_(self, callback):
+        self = objc.super(_WinDelegate, self).init()
+        self._callback = callback
+        return self
+
     def windowWillClose_(self, notif):
-        pass  # keep alive; caller decides when to destroy
+        if self._callback:
+            self._callback()
 
 
 class WebViewWindow:
@@ -110,7 +120,7 @@ class WebViewWindow:
         if self._min_size:
             win.setMinSize_(NSMakeSize(*self._min_size))
 
-        win_del = _WinDelegate.alloc().init()
+        win_del = _WinDelegate.alloc().initWithCallback_(self.on_close)
         win.setDelegate_(win_del)
         self._win_delegate = win_del
 
@@ -126,9 +136,9 @@ class WebViewWindow:
         wv = WKWebView.alloc().initWithFrame_configuration_(
             win.contentView().bounds(), cfg
         )
-        wv.setAutoresizingMask_(18)  # flexible width + height
+        wv.setAutoresizingMask_(_FLEXIBLE)
 
-        nav_del = _NavDelegate.alloc().initWithCallback_(self._on_load_internal)
+        nav_del = _NavDelegate.alloc().initWithCallback_(self.on_load)
         wv.setNavigationDelegate_(nav_del)
         self._nav_delegate = nav_del
 
@@ -144,9 +154,6 @@ class WebViewWindow:
         url = NSURL.fileURLWithPath_(str(html_path))
         base = NSURL.fileURLWithPath_(str(_UI_DIR))
         self._webview.loadFileURL_allowingReadAccessToURL_(url, base)
-
-    def _on_load_internal(self):
-        self.on_load()
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -169,3 +176,6 @@ class WebViewWindow:
 
     def on_load(self) -> None:  # noqa: B027
         """Override in subclass. Called once after HTML finishes loading."""
+
+    def on_close(self) -> None:  # noqa: B027
+        """Override in subclass. Called when the window is closed."""
