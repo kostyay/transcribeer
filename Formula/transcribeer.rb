@@ -5,8 +5,8 @@ class Transcribeer < Formula
   sha256 "34a98e6bcdadae624659d6a2f8764cf8690670b797dc4fb7cb57c493828ca22a"
   license "MIT"
 
-  depends_on macos: :ventura
   depends_on "ffmpeg"
+  depends_on macos: :ventura
   depends_on "python@3.11"
 
   def install
