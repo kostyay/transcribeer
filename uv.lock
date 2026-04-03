@@ -3623,7 +3623,7 @@ wheels = [
 
 [[package]]
 name = "transcribeer"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "faster-whisper" },
@@ -3646,9 +3646,12 @@ dev = [
     { name = "scikit-learn" },
 ]
 gui = [
+    { name = "pyobjc-framework-cocoa" },
     { name = "pyobjc-framework-usernotifications" },
     { name = "pyobjc-framework-webkit" },
+    { name = "resemblyzer" },
     { name = "rumps" },
+    { name = "scikit-learn" },
 ]
 openai = [
     { name = "openai" },
@@ -3669,15 +3672,18 @@ requires-dist = [
     { name = "openai", marker = "extra == 'dev'", specifier = ">=1" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=1" },
     { name = "pyannote-audio", marker = "extra == 'pyannote'" },
+    { name = "pyobjc-framework-cocoa", marker = "extra == 'gui'", specifier = ">=10" },
     { name = "pyobjc-framework-usernotifications", marker = "extra == 'gui'", specifier = ">=10" },
     { name = "pyobjc-framework-webkit", marker = "extra == 'gui'", specifier = ">=10" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "requests" },
     { name = "resemblyzer", marker = "extra == 'dev'" },
+    { name = "resemblyzer", marker = "extra == 'gui'" },
     { name = "resemblyzer", marker = "extra == 'resemblyzer'" },
     { name = "rich", specifier = ">=13" },
     { name = "rumps", marker = "extra == 'gui'", specifier = ">=0.4" },
     { name = "scikit-learn", marker = "extra == 'dev'" },
+    { name = "scikit-learn", marker = "extra == 'gui'" },
     { name = "scikit-learn", marker = "extra == 'resemblyzer'" },
     { name = "torch" },
     { name = "torchaudio" },

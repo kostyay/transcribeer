@@ -73,8 +73,25 @@ class _NotifDelegate(AppKit.NSObject):
         completionHandler(UN.UNNotificationPresentationOptionBanner)
 
 
+def _has_app_bundle() -> bool:
+    """Return True only when running inside a proper .app bundle.
+
+    UNUserNotificationCenter requires a bundle with a bundle ID. Running from a
+    bare Python script (e.g. `make gui`) has no bundle, and calling
+    currentNotificationCenter() raises a fatal NSInternalInconsistencyException
+    that cannot be caught in Python. Check before touching any UN APIs.
+    """
+    bundle_id = AppKit.NSBundle.mainBundle().bundleIdentifier()
+    return bool(bundle_id)
+
+
+_notifications_available = _has_app_bundle()
+
+
 def _setup_notifications(delegate: _NotifDelegate) -> None:
     """Register notification category + actions and request permission."""
+    if not _notifications_available:
+        return
     record_action = UN.UNNotificationAction.actionWithIdentifier_title_options_(
         _ACTION_RECORD, "⏺ Start Recording", UN.UNNotificationActionOptionForeground
     )
@@ -95,6 +112,8 @@ def _setup_notifications(delegate: _NotifDelegate) -> None:
 
 
 def _send_zoom_notification() -> None:
+    if not _notifications_available:
+        return
     content = UN.UNMutableNotificationContent.alloc().init()
     content.setTitle_("Zoom meeting in progress")
     content.setBody_("No recording active — want to record this meeting?")
@@ -108,6 +127,8 @@ def _send_zoom_notification() -> None:
 
 
 def _cancel_zoom_notification() -> None:
+    if not _notifications_available:
+        return
     UN.UNUserNotificationCenter.currentNotificationCenter() \
         .removePendingNotificationRequestsWithIdentifiers_(["zoom_meeting"])
     UN.UNUserNotificationCenter.currentNotificationCenter() \
