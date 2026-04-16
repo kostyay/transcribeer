@@ -21,7 +21,7 @@ final class TranscriptionService {
     /// Load (and download if needed) a WhisperKit model.
     ///
     /// - Parameter name: Model variant name (e.g. "large-v3-turbo").
-    func loadModel(name: String = "openai_whisper-large-v3-turbo") async throws {
+    func loadModel(name: String = "openai_whisper-large-v3_turbo") async throws {
         guard modelState != .loaded else { return }
 
         modelState = .downloading

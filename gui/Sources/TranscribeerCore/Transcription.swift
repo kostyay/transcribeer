@@ -1,6 +1,13 @@
 import Foundation
 import WhisperKit
 
+/// Strip Whisper special tokens like <|en|>, <|0.00|>, <|startoftranscript|> etc.
+private func stripWhisperTokens(_ text: String) -> String {
+    text
+        .replacingOccurrences(of: "<\\|[^|>]*\\|>", with: "", options: .regularExpression)
+        .trimmingCharacters(in: .whitespaces)
+}
+
 /// A single transcribed segment with timing info.
 public struct TranscriptSegment: Sendable {
     public let start: Double
@@ -64,11 +71,13 @@ public func transcribeAudio(
     )
 
     return results.flatMap { result in
-        result.segments.map { seg in
-            TranscriptSegment(
+        result.segments.compactMap { seg in
+            let clean = stripWhisperTokens(seg.text)
+            guard !clean.isEmpty else { return nil }
+            return TranscriptSegment(
                 start: Double(seg.start),
                 end: Double(seg.end),
-                text: seg.text.trimmingCharacters(in: .whitespaces)
+                text: clean
             )
         }
     }

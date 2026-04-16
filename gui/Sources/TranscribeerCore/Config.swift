@@ -3,7 +3,7 @@ import TOMLDecoder
 
 public struct AppConfig: Equatable, Sendable {
     public var language: String = "auto"
-    public var whisperModel: String = "openai_whisper-large-v3-turbo"
+    public var whisperModel: String = "openai_whisper-large-v3_turbo"
     public var diarization: String = "pyannote"
     public var numSpeakers: Int = 0
     public var llmBackend: String = "ollama"
