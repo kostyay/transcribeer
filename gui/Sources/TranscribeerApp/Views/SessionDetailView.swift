@@ -133,7 +133,8 @@ struct SessionDetailView: View {
                         Text(p).tag(p)
                     }
                 }
-                .frame(width: 100)
+                .frame(minWidth: 160)
+                .fixedSize()
                 .controlSize(.small)
 
                 Button("Re-summarize") {

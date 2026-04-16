@@ -16,8 +16,11 @@ struct SettingsView: View {
             Tab("Summarization", systemImage: "text.badge.checkmark") {
                 summarizationTab
             }
+            Tab("Prompts", systemImage: "text.bubble") {
+                PromptsSettingsView()
+            }
         }
-        .frame(width: 460, height: 360)
+        .frame(width: 640, height: 460)
         .onAppear {
             apiKey = KeychainHelper.getAPIKey(backend: config.llmBackend) ?? ""
         }
