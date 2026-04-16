@@ -3,6 +3,28 @@ import os.log
 
 private let logger = Logger(subsystem: "com.transcribeer", category: "pipeline")
 
+/// Appends timestamped lines to a session's `run.log` file.
+private struct SessionLogger {
+    let logPath: URL
+
+    func log(_ message: String) {
+        let timestamp = DateFormatter.localizedString(
+            from: Date(),
+            dateStyle: .none,
+            timeStyle: .medium
+        )
+        let data = Data("[\(timestamp)] \(message)\n".utf8)
+
+        if let handle = try? FileHandle(forWritingTo: logPath) {
+            handle.seekToEndOfFile()
+            handle.write(data)
+            try? handle.close()
+        } else {
+            try? data.write(to: logPath)
+        }
+    }
+}
+
 /// Runs the transcribeer pipeline using native Swift services.
 @Observable
 @MainActor
@@ -46,60 +68,83 @@ final class PipelineRunner {
         let audioPath = session.appendingPathComponent("audio.m4a")
         let transcriptPath = session.appendingPathComponent("transcript.txt")
         let summaryPath = session.appendingPathComponent("summary.md")
-        let logPath = session.appendingPathComponent("run.log")
+        let logger = SessionLogger(logPath: session.appendingPathComponent("run.log"))
 
-        func log(_ msg: String) {
-            let ts = DateFormatter.localizedString(
-                from: Date(), dateStyle: .none, timeStyle: .medium
-            )
-            guard let data = "[\(ts)] \(msg)\n".data(using: .utf8) else { return }
-
-            if let handle = try? FileHandle(forWritingTo: logPath) {
-                handle.seekToEndOfFile()
-                handle.write(data)
-                try? handle.close()
-            } else {
-                try? data.write(to: logPath)
-            }
-        }
-
-        log("session=\(session.path)")
-        log("pipeline=\(config.pipelineMode) lang=\(config.language) diarize=\(config.diarization)")
+        logger.log("session=\(session.path)")
+        logger.log("pipeline=\(config.pipelineMode) lang=\(config.language) diarize=\(config.diarization)")
 
         // 1. Record — use capture-bin directly
-        log("capture-bin=\(config.expandedCaptureBin)")
-        let recordResult = await runCapture(
-            captureBin: config.expandedCaptureBin,
-            audioPath: audioPath
-        )
-
-        switch recordResult {
-        case .error(let err):
-            log("capture failed: \(err)")
-            state = .error(err)
-            NotificationManager.notifyError(err)
+        logger.log("capture-bin=\(config.expandedCaptureBin)")
+        guard await performRecording(config: config, audioPath: audioPath, logger: logger) else {
             return
-        case .noAudio:
-            log("no audio captured")
-            state = .idle
-            return
-        case .recorded:
-            let size = (try? FileManager.default.attributesOfItem(
-                atPath: audioPath.path
-            )[.size] as? Int ?? 0) ?? 0
-            log("recorded \(size) bytes")
         }
 
         if config.pipelineMode == "record-only" {
-            state = .done(sessionPath: session.path)
-            NotificationManager.notifyDone(sessionName: SessionManager.displayName(session))
+            finishSession(session)
             return
         }
 
         // 2. Transcribe (WhisperKit + SpeakerKit)
-        state = .transcribing
-        log("transcription started")
+        guard await performTranscription(
+            config: config,
+            audioPath: audioPath,
+            transcriptPath: transcriptPath,
+            logger: logger
+        ) else { return }
 
+        if config.pipelineMode == "record+transcribe" {
+            finishSession(session)
+            return
+        }
+
+        // 3. Summarize (LLM) — failure here is non-fatal
+        await performSummarization(
+            config: config,
+            transcriptPath: transcriptPath,
+            summaryPath: summaryPath,
+            logger: logger
+        )
+
+        finishSession(session)
+    }
+
+    private func performRecording(
+        config: AppConfig,
+        audioPath: URL,
+        logger: SessionLogger
+    ) async -> Bool {
+        let result = await runCapture(
+            captureBin: config.expandedCaptureBin,
+            audioPath: audioPath
+        )
+
+        switch result {
+        case let .error(err):
+            logger.log("capture failed: \(err)")
+            state = .error(err)
+            NotificationManager.notifyError(err)
+            return false
+        case .noAudio:
+            logger.log("no audio captured")
+            state = .idle
+            return false
+        case .recorded:
+            let size = (try? FileManager.default.attributesOfItem(
+                atPath: audioPath.path
+            )[.size] as? Int ?? 0) ?? 0
+            logger.log("recorded \(size) bytes")
+            return true
+        }
+    }
+
+    private func performTranscription(
+        config: AppConfig,
+        audioPath: URL,
+        transcriptPath: URL,
+        logger: SessionLogger
+    ) async -> Bool {
+        state = .transcribing
+        logger.log("transcription started")
         do {
             let result = try await transcribeAndFormat(
                 audioPath: audioPath,
@@ -109,25 +154,25 @@ final class PipelineRunner {
                 numSpeakers: config.numSpeakers
             )
             try result.write(to: transcriptPath, atomically: true, encoding: .utf8)
-            log("transcription done")
+            logger.log("transcription done")
+            return true
         } catch {
-            let err = "Transcription failed: \(error.localizedDescription)"
-            log(err)
-            state = .error(err)
-            NotificationManager.notifyError(err)
-            return
+            let message = "Transcription failed: \(error.localizedDescription)"
+            logger.log(message)
+            state = .error(message)
+            NotificationManager.notifyError(message)
+            return false
         }
+    }
 
-        if config.pipelineMode == "record+transcribe" {
-            state = .done(sessionPath: session.path)
-            NotificationManager.notifyDone(sessionName: SessionManager.displayName(session))
-            return
-        }
-
-        // 3. Summarize (LLM)
+    private func performSummarization(
+        config: AppConfig,
+        transcriptPath: URL,
+        summaryPath: URL,
+        logger: SessionLogger
+    ) async {
         state = .summarizing
-        log("summarization started backend=\(config.llmBackend) model=\(config.llmModel) profile=\(promptProfile ?? "default")")
-
+        logger.log("summarization started backend=\(config.llmBackend) model=\(config.llmModel) profile=\(promptProfile ?? "default")")
         do {
             let transcript = try String(contentsOf: transcriptPath, encoding: .utf8)
             let customPrompt = SummarizationService.loadPromptProfile(promptProfile)
@@ -139,12 +184,14 @@ final class PipelineRunner {
                 prompt: customPrompt
             )
             try summary.write(to: summaryPath, atomically: true, encoding: .utf8)
-            log("summarization done")
+            logger.log("summarization done")
         } catch {
-            log("summarization failed: \(error.localizedDescription)")
-            // Done anyway — transcript is what matters
+            logger.log("summarization failed: \(error.localizedDescription)")
+            // Non-fatal — transcript is what matters.
         }
+    }
 
+    private func finishSession(_ session: URL) {
         state = .done(sessionPath: session.path)
         NotificationManager.notifyDone(sessionName: SessionManager.displayName(session))
     }

@@ -3,7 +3,6 @@ import Testing
 @testable import TranscribeerApp
 
 struct AppStateTests {
-
     // MARK: - isRecording
 
     @Test("isRecording is true only for .recording state",
@@ -53,7 +52,7 @@ struct AppStateTests {
 
     @Test("Idle state has empty status text")
     func idleStatusText() {
-        #expect(AppState.idle.statusText == "")
+        #expect(AppState.idle.statusText.isEmpty)
     }
 
     @Test("Transcribing shows pencil emoji")

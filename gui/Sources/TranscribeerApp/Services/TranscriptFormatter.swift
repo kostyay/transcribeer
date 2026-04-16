@@ -10,7 +10,6 @@ struct LabeledSegment {
 
 /// Ports assign_speakers() and format_output() from Python transcribe.py.
 enum TranscriptFormatter {
-
     /// Assign a speaker label to each whisper segment based on overlap
     /// with diarization segments. Falls back to midpoint containment.
     static func assignSpeakers(
@@ -34,8 +33,10 @@ enum TranscriptFormatter {
             }
 
             return LabeledSegment(
-                start: ws.start, end: ws.end,
-                speaker: bestSpeaker, text: ws.text
+                start: ws.start,
+                end: ws.end,
+                speaker: bestSpeaker,
+                text: ws.text
             )
         }
     }
@@ -57,14 +58,24 @@ enum TranscriptFormatter {
         speakerMap["UNKNOWN"] = "???"
 
         // Merge consecutive same-speaker segments
-        var merged: [(start: Double, end: Double, speaker: String, text: String)] = []
+        var merged: [MergedLine] = []
         for seg in segments {
             let friendly = speakerMap[seg.speaker] ?? seg.speaker
             if let last = merged.last, last.speaker == friendly {
                 let prev = merged.removeLast()
-                merged.append((prev.start, seg.end, friendly, prev.text + " " + seg.text))
+                merged.append(MergedLine(
+                    start: prev.start,
+                    end: seg.end,
+                    speaker: friendly,
+                    text: prev.text + " " + seg.text
+                ))
             } else {
-                merged.append((seg.start, seg.end, friendly, seg.text))
+                merged.append(MergedLine(
+                    start: seg.start,
+                    end: seg.end,
+                    speaker: friendly,
+                    text: seg.text
+                ))
             }
         }
 
@@ -72,6 +83,14 @@ enum TranscriptFormatter {
             let ts = "[\(formatTimestamp(seg.start)) -> \(formatTimestamp(seg.end))]"
             return "\(ts) \(seg.speaker): \(seg.text)"
         }.joined(separator: "\n")
+    }
+
+    /// Internal accumulator for merging consecutive same-speaker segments.
+    private struct MergedLine {
+        var start: Double
+        var end: Double
+        var speaker: String
+        var text: String
     }
 
     /// Formats seconds as MM:SS.

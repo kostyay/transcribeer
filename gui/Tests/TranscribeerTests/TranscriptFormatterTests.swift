@@ -2,7 +2,6 @@ import Testing
 @testable import TranscribeerApp
 
 struct TranscriptFormatterTests {
-
     // MARK: - formatTimestamp
 
     @Test("Formats seconds as MM:SS",
@@ -118,7 +117,7 @@ struct TranscriptFormatterTests {
 
     @Test("Empty segments → empty string")
     func emptySegments() {
-        #expect(TranscriptFormatter.format([]) == "")
+        #expect(TranscriptFormatter.format([]).isEmpty)
     }
 
     @Test("Speaker numbering is stable (first-seen order)")

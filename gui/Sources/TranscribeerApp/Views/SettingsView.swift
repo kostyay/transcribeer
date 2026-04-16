@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @Binding var config: AppConfig
     @State private var apiKey: String = ""
+    @State private var modelCatalog = ModelCatalogService()
 
     var body: some View {
         TabView {
@@ -30,11 +31,7 @@ struct SettingsView: View {
                 Toggle("Transcribe after recording", isOn: Binding(
                     get: { config.pipelineMode != "record-only" },
                     set: { enabled in
-                        if enabled {
-                            config.pipelineMode = "record+transcribe"
-                        } else {
-                            config.pipelineMode = "record-only"
-                        }
+                        config.pipelineMode = enabled ? "record+transcribe" : "record-only"
                         save()
                     }
                 ))
@@ -69,26 +66,34 @@ struct SettingsView: View {
 
     // MARK: - Transcription
 
-    private static let whisperModels = [
-        "base", "small", "medium", "large-v3", "large-v3-turbo",
-    ]
-
     private var transcriptionTab: some View {
         Form {
             Section {
-                Picker("Whisper model", selection: Binding(
-                    get: { config.whisperModel },
-                    set: { config.whisperModel = $0; save() }
-                )) {
-                    ForEach(Self.whisperModels, id: \.self) { model in
-                        Text(model).tag(model)
+                modelPicker
+            } header: {
+                HStack {
+                    Text("Whisper model")
+                    Spacer()
+                    if modelCatalog.isLoading {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Button {
+                            Task { await modelCatalog.refresh() }
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Refresh model list")
                     }
                 }
-            } header: {
-                Text("Model")
             } footer: {
-                Text("Models are downloaded on first use (~0.1–1.5 GB). Stored in ~/.transcribeer/models/.")
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Models are downloaded on first use (~0.1–1.5 GB). Stored in ~/.transcribeer/models/.")
+                    if let message = modelCatalog.lastError {
+                        Text(message).foregroundStyle(.orange)
+                    }
+                }
+                .foregroundStyle(.secondary)
             }
 
             Section {
@@ -110,6 +115,33 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .padding(.top, 8)
+        .task {
+            // Make sure whatever the user has selected is visible in the list,
+            // then refresh from the network. If refresh fails the pre-seeded
+            // entry keeps the UI usable.
+            modelCatalog.ensureEntry(for: AppConfig.canonicalWhisperModel(config.whisperModel))
+            await modelCatalog.refresh()
+            modelCatalog.ensureEntry(for: AppConfig.canonicalWhisperModel(config.whisperModel))
+        }
+    }
+
+    @ViewBuilder
+    private var modelPicker: some View {
+        let selected = AppConfig.canonicalWhisperModel(config.whisperModel)
+        Picker("Model", selection: Binding(
+            get: { selected },
+            set: { config.whisperModel = $0; save() }
+        )) {
+            if modelCatalog.entries.isEmpty {
+                Text(selected).tag(selected)
+            } else {
+                ForEach(modelCatalog.entries) { entry in
+                    ModelPickerRow(entry: entry).tag(entry.id)
+                }
+            }
+        }
+        .pickerStyle(.menu)
+        .disabled(modelCatalog.entries.isEmpty)
     }
 
     // MARK: - Summarization
@@ -119,9 +151,9 @@ struct SettingsView: View {
             Section {
                 Picker("Backend", selection: Binding(
                     get: { config.llmBackend },
-                    set: {
-                        config.llmBackend = $0
-                        apiKey = KeychainHelper.getAPIKey(backend: $0) ?? ""
+                    set: { newBackend in
+                        config.llmBackend = newBackend
+                        apiKey = KeychainHelper.getAPIKey(backend: newBackend) ?? ""
                         save()
                     }
                 )) {
@@ -174,5 +206,41 @@ struct SettingsView: View {
 
     private func save() {
         ConfigManager.save(config)
+    }
+}
+
+/// One row in the Whisper model picker, rendering name + status badges.
+///
+/// Kept as its own view so the `Picker` can render it both as the collapsed
+/// label and inside the menu without duplicating layout.
+private struct ModelPickerRow: View {
+    let entry: WhisperModelEntry
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(entry.displayName)
+            if entry.isRecommendedDefault {
+                Text("default").modifier(BadgeStyle(tint: .accentColor))
+            }
+            if entry.isDownloaded {
+                Text("downloaded").modifier(BadgeStyle(tint: .green))
+            }
+            if entry.isDisabled {
+                Text("unsupported").modifier(BadgeStyle(tint: .secondary))
+            }
+        }
+    }
+}
+
+private struct BadgeStyle: ViewModifier {
+    let tint: Color
+
+    func body(content: Content) -> some View {
+        content
+            .font(.caption2)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(tint.opacity(0.18), in: Capsule())
+            .foregroundStyle(tint)
     }
 }

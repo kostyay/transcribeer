@@ -12,7 +12,7 @@ struct Session: Identifiable, Equatable {
     let duration: String
     let snippet: String
 
-    static func == (lhs: Session, rhs: Session) -> Bool {
+    static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.id == rhs.id
     }
 }

@@ -38,10 +38,7 @@ enum SummarizationService {
         case "anthropic":
             .anthropic(apiKey: try requireKey("anthropic", env: "ANTHROPIC_API_KEY"))
         case "ollama":
-            .other(
-                URL(string: "\(ollamaHost)/v1")!,
-                apiKey: nil
-            )
+            try .other(requireURL("\(ollamaHost)/v1"), apiKey: nil)
         default:
             throw SummarizationError.unknownBackend(backend)
         }
@@ -68,6 +65,13 @@ enum SummarizationService {
 
     // MARK: - Private
 
+    private static func requireURL(_ string: String) throws -> URL {
+        guard let url = URL(string: string) else {
+            throw SummarizationError.invalidOllamaHost(string)
+        }
+        return url
+    }
+
     private static func requireKey(
         _ backend: String,
         env envVar: String
@@ -85,13 +89,16 @@ enum SummarizationService {
 enum SummarizationError: LocalizedError {
     case unknownBackend(String)
     case missingAPIKey(String, String)
+    case invalidOllamaHost(String)
 
     var errorDescription: String? {
         switch self {
-        case .unknownBackend(let name):
-            return "Unknown summarization backend: '\(name)'. Use 'openai', 'anthropic', or 'ollama'."
-        case .missingAPIKey(let backend, let envVar):
-            return "No \(backend) API key found (Keychain or \(envVar) env var)."
+        case let .unknownBackend(name):
+            "Unknown summarization backend: '\(name)'. Use 'openai', 'anthropic', or 'ollama'."
+        case let .missingAPIKey(backend, envVar):
+            "No \(backend) API key found (Keychain or \(envVar) env var)."
+        case let .invalidOllamaHost(value):
+            "Invalid Ollama host URL: '\(value)'."
         }
     }
 }

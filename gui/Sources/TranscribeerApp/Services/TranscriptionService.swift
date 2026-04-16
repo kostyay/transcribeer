@@ -26,8 +26,10 @@ final class TranscriptionService {
 
     /// Load (and download if needed) a WhisperKit model.
     ///
-    /// - Parameter name: Model variant name (e.g. "large-v3-turbo").
-    func loadModel(name: String = "large-v3-turbo") async throws {
+    /// - Parameter name: WhisperKit model identifier, matching a folder in
+    ///   `argmaxinc/whisperkit-coreml` (e.g. `"openai_whisper-large-v3_turbo"`).
+    ///   Legacy short names (e.g. `"large-v3-turbo"`) are migrated automatically.
+    func loadModel(name: String = "openai_whisper-large-v3_turbo") async throws {
         guard modelState != .loaded else { return }
 
         modelState = .downloading
@@ -37,8 +39,9 @@ final class TranscriptionService {
             at: downloadBase, withIntermediateDirectories: true
         )
 
+        let canonical = AppConfig.canonicalWhisperModel(name)
         let config = WhisperKitConfig(
-            model: name,
+            model: canonical,
             downloadBase: downloadBase,
             verbose: false,
             logLevel: .none,
@@ -131,8 +134,7 @@ enum TranscriptionError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .modelNotLoaded:
-            return "Whisper model is not loaded."
+        case .modelNotLoaded: "Whisper model is not loaded."
         }
     }
 }
