@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 
 /// Represents a single recording session directory.
@@ -75,17 +76,7 @@ enum SessionManager {
         let meta = readMeta(dir)
         let rawName = meta["name"] as? String ?? ""
         let displayName = rawName.isEmpty ? dir.lastPathComponent : rawName
-
-        let creationDate: Date
-        if let vals = try? dir.resourceValues(forKeys: [.creationDateKey]),
-           let d = vals.creationDate {
-            creationDate = d
-        } else {
-            creationDate = .distantPast
-        }
-
-        let fmt = DateFormatter()
-        fmt.dateFormat = "MMM d, yyyy HH:mm"
+        let creationDate = creationDate(of: dir)
 
         return Session(
             id: dir.path,
@@ -93,7 +84,7 @@ enum SessionManager {
             name: displayName,
             isUntitled: rawName.isEmpty,
             date: creationDate,
-            formattedDate: fmt.string(from: creationDate),
+            formattedDate: dateFormatter.string(from: creationDate),
             duration: audioDuration(dir),
             snippet: snippet(dir)
         )
@@ -101,32 +92,19 @@ enum SessionManager {
 
     static func sessionDetail(_ dir: URL) -> SessionDetail {
         let meta = readMeta(dir)
-        let fmt = DateFormatter()
-        fmt.dateFormat = "MMM d, yyyy HH:mm"
-        let creationDate: Date
-        if let vals = try? dir.resourceValues(forKeys: [.creationDateKey]),
-           let d = vals.creationDate {
-            creationDate = d
-        } else {
-            creationDate = .distantPast
-        }
-
         let txPath = dir.appendingPathComponent("transcript.txt")
         let smPath = dir.appendingPathComponent("summary.md")
-        let audioPath = dir.appendingPathComponent("audio.wav")
-
-        let hasAudio = FileManager.default.fileExists(atPath: audioPath.path)
 
         return SessionDetail(
             name: meta["name"] as? String ?? "",
             notes: meta["notes"] as? String ?? "",
-            date: fmt.string(from: creationDate),
+            date: dateFormatter.string(from: creationDate(of: dir)),
             duration: audioDuration(dir),
             transcript: (try? String(contentsOf: txPath, encoding: .utf8)) ?? "",
             summary: (try? String(contentsOf: smPath, encoding: .utf8)) ?? "",
-            canTranscribe: hasAudio,
+            canTranscribe: audioURL(in: dir) != nil,
             canSummarize: FileManager.default.fileExists(atPath: txPath.path),
-            audioURL: hasAudio ? audioPath : nil
+            audioURL: audioURL(in: dir)
         )
     }
 
@@ -167,37 +145,30 @@ enum SessionManager {
 
     // MARK: - Helpers
 
+    private static let dateFormatter: DateFormatter = {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "MMM d, yyyy HH:mm"
+        return fmt
+    }()
+
+    private static func creationDate(of dir: URL) -> Date {
+        (try? dir.resourceValues(forKeys: [.creationDateKey]))?.creationDate ?? .distantPast
+    }
+
+    /// Locate the audio file in a session directory (M4A preferred, WAV fallback).
+    static func audioURL(in dir: URL) -> URL? {
+        let m4a = dir.appendingPathComponent("audio.m4a")
+        if FileManager.default.fileExists(atPath: m4a.path) { return m4a }
+        let wav = dir.appendingPathComponent("audio.wav")
+        if FileManager.default.fileExists(atPath: wav.path) { return wav }
+        return nil
+    }
+
+    /// Audio duration using AVAudioFile — works for any Core Audio format.
     private static func audioDuration(_ dir: URL) -> String {
-        let path = dir.appendingPathComponent("audio.wav")
-        guard FileManager.default.fileExists(atPath: path.path) else { return "—" }
-
-        // Read WAV header to get duration
-        guard let handle = try? FileHandle(forReadingFrom: path) else { return "—" }
-        defer { try? handle.close() }
-
-        let header = handle.readData(ofLength: 44)
-        guard header.count == 44 else { return "—" }
-
-        // Bytes 24-27: sample rate (little-endian)
-        let sampleRate = header.withUnsafeBytes { buf -> UInt32 in
-            buf.load(fromByteOffset: 24, as: UInt32.self)
-        }
-        // Bytes 34-35: bits per sample
-        let bitsPerSample = header.withUnsafeBytes { buf -> UInt16 in
-            buf.load(fromByteOffset: 34, as: UInt16.self)
-        }
-        // Bytes 22-23: channels
-        let channels = header.withUnsafeBytes { buf -> UInt16 in
-            buf.load(fromByteOffset: 22, as: UInt16.self)
-        }
-
-        guard sampleRate > 0, bitsPerSample > 0, channels > 0 else { return "—" }
-
-        let fileSize = (try? FileManager.default.attributesOfItem(atPath: path.path)[.size] as? UInt64) ?? 0
-        let dataSize = fileSize - 44
-        let bytesPerSample = UInt64(bitsPerSample) / 8
-        let totalSamples = dataSize / (bytesPerSample * UInt64(channels))
-        let seconds = Int(totalSamples / UInt64(sampleRate))
+        guard let url = audioURL(in: dir),
+              let file = try? AVAudioFile(forReading: url) else { return "—" }
+        let seconds = Int(Double(file.length) / file.fileFormat.sampleRate)
         let m = seconds / 60
         let s = seconds % 60
         return String(format: "%d:%02d", m, s)
@@ -207,11 +178,11 @@ enum SessionManager {
         for fname in ["summary.md", "transcript.txt"] {
             let path = dir.appendingPathComponent(fname)
             guard let text = try? String(contentsOf: path, encoding: .utf8) else { continue }
-            for line in text.components(separatedBy: .newlines) {
-                let trimmed = line.trimmingCharacters(in: .whitespaces)
-                if !trimmed.isEmpty {
-                    return String(trimmed.prefix(120))
-                }
+            if let first = text.components(separatedBy: .newlines)
+                .lazy
+                .map({ $0.trimmingCharacters(in: .whitespaces) })
+                .first(where: { !$0.isEmpty }) {
+                return String(first.prefix(120))
             }
         }
         return ""

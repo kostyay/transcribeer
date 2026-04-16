@@ -5,11 +5,11 @@ import CaptureCore
 // ── 1. Parse args ────────────────────────────────────────────────────────────
 let args = CommandLine.arguments
 guard args.count >= 2 else {
-    fputs("Usage: capture <output.wav> [duration_seconds]\n", stderr)
+    fputs("Usage: capture <output.m4a> [duration_seconds]\n", stderr)
     exit(1)
 }
 let outputPath = args[1]
-var autoDuration: Double? = nil
+var autoDuration: Double?
 if args.count >= 3 {
     guard let d = Int(args[2]), d > 0 else {
         fputs("Invalid duration: '\(args[2])'. Must be a positive integer (seconds).\n", stderr)
@@ -26,10 +26,10 @@ guard CGPreflightScreenCaptureAccess() else {
     exit(1)
 }
 
-// ── 3. Open WAV writer ───────────────────────────────────────────────────────
-let writer = WAVWriter.shared
+// ── 3. Open audio writer ─────────────────────────────────────────────────────
+let writer = AudioFileWriter.shared
 do {
-    try writer.open(path: outputPath)
+    try writer.open(url: URL(fileURLWithPath: outputPath))
 } catch {
     fputs("Cannot write to \(outputPath): \(error)\n", stderr)
     exit(1)
@@ -38,13 +38,20 @@ do {
 // ── 4. Shutdown helper (called from SIGINT and auto-stop) ───────────────────
 var stopped = false
 let startTime = Date()
+func elapsedString() -> String {
+    let elapsed = Int(Date().timeIntervalSince(startTime))
+    return String(format: "%02d:%02d", elapsed / 60, elapsed % 60)
+}
+
+func fileSizeMB() -> String {
+    let size = (try? FileManager.default.attributesOfItem(atPath: outputPath)[.size] as? Int) ?? 0
+    return String(format: "%.1f", Double(size) / 1_048_576)
+}
+
 func shutdown() {
     AudioCapture.shared.stop()
-    WAVWriter.shared.close()
-    let elapsed = Int(Date().timeIntervalSince(startTime))
-    let m = elapsed / 60, s = elapsed % 60
-    let size = (try? FileManager.default.attributesOfItem(atPath: outputPath)[.size] as? Int) ?? 0
-    fputs("\nDone. [\(String(format: "%02d:%02d", m, s))] \(String(format: "%.1f", Double(size) / 1_048_576)) MB → \(outputPath)\n", stderr)
+    AudioFileWriter.shared.close()
+    fputs("\nDone. [\(elapsedString())] \(fileSizeMB()) MB → \(outputPath)\n", stderr)
 }
 
 // ── 5. SIGINT handler ────────────────────────────────────────────────────────
@@ -90,10 +97,7 @@ Task {
 let ticker = DispatchSource.makeTimerSource(queue: .main)
 ticker.schedule(deadline: .now() + 1, repeating: 1.0)
 ticker.setEventHandler {
-    let elapsed = Int(Date().timeIntervalSince(startTime))
-    let m = elapsed / 60, s = elapsed % 60
-    let size = (try? FileManager.default.attributesOfItem(atPath: outputPath)[.size] as? Int) ?? 0
-    fputs("\r[\(String(format: "%02d:%02d", m, s))] \(String(format: "%.1f", Double(size) / 1_048_576)) MB  ", stderr)
+    fputs("\r[\(elapsedString())] \(fileSizeMB()) MB  ", stderr)
 }
 ticker.resume()
 

@@ -21,11 +21,9 @@ struct TranscribeerApp: App {
         }
         .menuBarExtraStyle(.menu)
 
-        Window("Transcribeer Settings", id: "settings") {
+        Settings {
             SettingsView(config: $config)
         }
-        .windowResizability(.contentSize)
-        .defaultSize(width: 460, height: 360)
 
         Window("Recording History", id: "history") {
             HistoryView(config: $config, runner: runner)
@@ -87,12 +85,11 @@ struct TranscribeerApp: App {
         Divider()
 
         Button("History…") {
-            NSApp.activate()
+            NSApp.activate(ignoringOtherApps: true)
             openWindow(id: "history")
         }
-        Button("Settings…") {
-            NSApp.activate()
-            openWindow(id: "settings")
+        SettingsLink {
+            Text("Settings…")
         }
 
         Divider()

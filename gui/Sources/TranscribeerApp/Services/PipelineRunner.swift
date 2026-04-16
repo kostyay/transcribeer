@@ -43,7 +43,7 @@ final class PipelineRunner {
     }
 
     private func runPipeline(session: URL, config: AppConfig) async {
-        let audioPath = session.appendingPathComponent("audio.wav")
+        let audioPath = session.appendingPathComponent("audio.m4a")
         let transcriptPath = session.appendingPathComponent("transcript.txt")
         let summaryPath = session.appendingPathComponent("summary.md")
         let logPath = session.appendingPathComponent("run.log")
@@ -52,17 +52,14 @@ final class PipelineRunner {
             let ts = DateFormatter.localizedString(
                 from: Date(), dateStyle: .none, timeStyle: .medium
             )
-            let line = "[\(ts)] \(msg)\n"
-            if let data = line.data(using: .utf8) {
-                if FileManager.default.fileExists(atPath: logPath.path) {
-                    if let handle = try? FileHandle(forWritingTo: logPath) {
-                        handle.seekToEndOfFile()
-                        handle.write(data)
-                        try? handle.close()
-                    }
-                } else {
-                    try? data.write(to: logPath)
-                }
+            guard let data = "[\(ts)] \(msg)\n".data(using: .utf8) else { return }
+
+            if let handle = try? FileHandle(forWritingTo: logPath) {
+                handle.seekToEndOfFile()
+                handle.write(data)
+                try? handle.close()
+            } else {
+                try? data.write(to: logPath)
             }
         }
 
@@ -244,15 +241,10 @@ final class PipelineRunner {
                     return
                 }
 
-                let exists = FileManager.default.fileExists(atPath: audioPath.path)
                 let size = (try? FileManager.default.attributesOfItem(
                     atPath: audioPath.path
                 )[.size] as? UInt64) ?? 0
-                if exists && size > 0 {
-                    continuation.resume(returning: .recorded)
-                } else {
-                    continuation.resume(returning: .noAudio)
-                }
+                continuation.resume(returning: size > 0 ? .recorded : .noAudio)
             }
         }
     }
@@ -267,12 +259,10 @@ final class PipelineRunner {
 
     /// Re-transcribe a session from its audio.
     func transcribeSession(_ session: URL, config: AppConfig) async -> CLIResult {
-        let audioPath = session.appendingPathComponent("audio.wav")
-        let txPath = session.appendingPathComponent("transcript.txt")
-
-        guard FileManager.default.fileExists(atPath: audioPath.path) else {
+        guard let audioPath = SessionManager.audioURL(in: session) else {
             return CLIResult(ok: false, error: "Audio file not found")
         }
+        let txPath = session.appendingPathComponent("transcript.txt")
 
         logger.info("re-transcribe: \(audioPath.path)")
 

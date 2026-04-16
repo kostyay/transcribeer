@@ -128,6 +128,8 @@ struct AudioPlayerView: View {
                 )
             }
             .frame(height: 6)
+            .accessibilityLabel("Playback position")
+            .accessibilityValue("\(formatTime(vm.currentTime)) of \(formatTime(vm.duration))")
 
             // Controls row
             HStack(spacing: 8) {
@@ -140,15 +142,14 @@ struct AudioPlayerView: View {
 
                 Spacer()
 
-                // Skip back 10s
                 Button { vm.skip(-10) } label: {
                     Image(systemName: "gobackward.10")
                         .font(.system(size: 13))
                 }
                 .buttonStyle(.plain)
                 .disabled(!vm.hasAudio)
+                .accessibilityLabel("Skip back 10 seconds")
 
-                // Play/Pause
                 Button { vm.togglePlay() } label: {
                     Image(systemName: vm.isPlaying ? "pause.fill" : "play.fill")
                         .font(.system(size: 15))
@@ -157,14 +158,15 @@ struct AudioPlayerView: View {
                 .buttonStyle(.plain)
                 .disabled(!vm.hasAudio)
                 .keyboardShortcut(.space, modifiers: [])
+                .accessibilityLabel(vm.isPlaying ? "Pause" : "Play")
 
-                // Skip forward 30s
                 Button { vm.skip(30) } label: {
                     Image(systemName: "goforward.30")
                         .font(.system(size: 13))
                 }
                 .buttonStyle(.plain)
                 .disabled(!vm.hasAudio)
+                .accessibilityLabel("Skip forward 30 seconds")
 
                 Spacer()
 

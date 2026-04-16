@@ -3,21 +3,18 @@ import SwiftUI
 struct SettingsView: View {
     @Binding var config: AppConfig
     @State private var apiKey: String = ""
-    @State private var selectedTab = 0
 
     var body: some View {
-        TabView(selection: $selectedTab) {
-            pipelineTab
-                .tabItem { Label("Pipeline", systemImage: "bolt") }
-                .tag(0)
-
-            transcriptionTab
-                .tabItem { Label("Transcription", systemImage: "waveform") }
-                .tag(1)
-
-            summarizationTab
-                .tabItem { Label("Summarization", systemImage: "text.badge.checkmark") }
-                .tag(2)
+        TabView {
+            Tab("Pipeline", systemImage: "bolt") {
+                pipelineTab
+            }
+            Tab("Transcription", systemImage: "waveform") {
+                transcriptionTab
+            }
+            Tab("Summarization", systemImage: "text.badge.checkmark") {
+                summarizationTab
+            }
         }
         .frame(width: 460, height: 360)
         .onAppear {

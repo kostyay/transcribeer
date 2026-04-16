@@ -146,14 +146,12 @@ struct SessionDetailView: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 8)
         }
-        .onAppear {
-            name = detail.name
-            notes = detail.notes
-        }
-        .onChange(of: session.id) { _, _ in
-            name = detail.name
-            notes = detail.notes
-        }
+        .onAppear { syncFields() }
+        .onChange(of: session.id) { _, _ in syncFields() }
     }
 
+    private func syncFields() {
+        name = detail.name
+        notes = detail.notes
+    }
 }
