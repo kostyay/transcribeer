@@ -85,6 +85,12 @@ export PLIST_CONTENT
 dev: capture build-dev
 	@mkdir -p $(LOG_DIR)
 	@launchctl bootout gui/$$(id -u)/$(PLIST_LABEL) 2>/dev/null || true
+	@# Wait for the previous instance to fully tear down; bootstrap errors with
+	@# EIO (5) if the service is still in the process of stopping.
+	@for i in 1 2 3 4 5 6 7 8 9 10; do \
+		if ! launchctl print gui/$$(id -u)/$(PLIST_LABEL) >/dev/null 2>&1; then break; fi; \
+		sleep 0.5; \
+	done
 	@echo "$$PLIST_CONTENT" > $(PLIST_PATH)
 	launchctl bootstrap gui/$$(id -u) $(PLIST_PATH)
 	@echo "✓ transcribeer dev agent installed and running"

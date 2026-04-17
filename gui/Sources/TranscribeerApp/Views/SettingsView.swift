@@ -100,9 +100,25 @@ struct SettingsView: View {
             }
 
             Section {
+                Picker("Language", selection: Binding(
+                    get: { TranscriptionLanguage.from(config.language) },
+                    set: { config.language = $0.rawValue; save() },
+                )) {
+                    ForEach(TranscriptionLanguage.allCases) { option in
+                        Text(option.displayName).tag(option)
+                    }
+                }
+            } header: {
+                Text("Language")
+            } footer: {
+                Text(languageFooterText)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
                 Picker("Speaker detection", selection: Binding(
                     get: { config.diarization },
-                    set: { config.diarization = $0; save() }
+                    set: { config.diarization = $0; save() },
                 )) {
                     Text("pyannote").tag("pyannote")
                     Text("none").tag("none")
@@ -126,6 +142,16 @@ struct SettingsView: View {
             await modelCatalog.refresh()
             modelCatalog.ensureEntry(for: AppConfig.canonicalWhisperModel(config.whisperModel))
         }
+    }
+
+    private var languageFooterText: String {
+        if config.language == "auto" {
+            return "Auto-detect runs a language-ID pass before transcription. "
+                + "Explicit selection is faster and more reliable — recommended "
+                + "if you only record in one or two languages."
+        }
+        let name = TranscriptionLanguage.from(config.language).displayName
+        return "Whisper will transcribe as \(name). Override per-session from the transcript tab."
     }
 
     @ViewBuilder

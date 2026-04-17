@@ -36,6 +36,11 @@ final class PipelineRunner {
     /// True when the current recording was auto-started by Zoom detection.
     var zoomAutoStarted = false
 
+    /// Which session is actively being transcribed right now, if any.
+    /// Set for both new recordings and re-transcribe-from-history flows so
+    /// the detail view can decide whether to render the live preview.
+    var transcribingSession: URL?
+
     /// Transcription progress (0..1), driven by WhisperKit.
     var transcriptionProgress: Double? { transcriptionService.progress }
 
@@ -43,6 +48,7 @@ final class PipelineRunner {
 
     private var captureProcess: Process?
     private var pipelineTask: Task<Void, Never>?
+    private var processingTask: Task<Void, Never>?
 
     func startRecording(config: AppConfig) {
         guard !state.isBusy else { return }
@@ -59,8 +65,21 @@ final class PipelineRunner {
 
     func stopRecording() {
         guard state.isRecording else { return }
-        if let proc = captureProcess, proc.isRunning {
-            proc.interrupt()  // SIGINT
+        if let captureProcess, captureProcess.isRunning {
+            captureProcess.interrupt()  // SIGINT
+        }
+    }
+
+    /// Cancel an in-flight transcription or summarization. Does nothing while
+    /// recording (use `stopRecording` for that).
+    func cancelProcessing() {
+        switch state {
+        case .transcribing, .summarizing:
+            transcriptionService.cancel()
+            processingTask?.cancel()
+            pipelineTask?.cancel()
+        default:
+            break
         }
     }
 
@@ -130,8 +149,8 @@ final class PipelineRunner {
             return false
         case .recorded:
             let size = (try? FileManager.default.attributesOfItem(
-                atPath: audioPath.path
-            )[.size] as? Int ?? 0) ?? 0
+                atPath: audioPath.path,
+            )[.size] as? Int) ?? 0
             logger.log("recorded \(size) bytes")
             return true
         }
@@ -141,9 +160,11 @@ final class PipelineRunner {
         config: AppConfig,
         audioPath: URL,
         transcriptPath: URL,
-        logger: SessionLogger
+        logger: SessionLogger,
     ) async -> Bool {
         state = .transcribing
+        transcribingSession = transcriptPath.deletingLastPathComponent()
+        defer { transcribingSession = nil }
         logger.log("transcription started")
         do {
             let result = try await transcribeAndFormat(
@@ -151,11 +172,16 @@ final class PipelineRunner {
                 language: config.language,
                 model: config.whisperModel,
                 diarization: config.diarization,
-                numSpeakers: config.numSpeakers
+                numSpeakers: config.numSpeakers,
             )
             try result.write(to: transcriptPath, atomically: true, encoding: .utf8)
+            SessionManager.setLanguage(transcriptPath.deletingLastPathComponent(), config.language)
             logger.log("transcription done")
             return true
+        } catch is CancellationError {
+            logger.log("transcription cancelled")
+            state = .idle
+            return false
         } catch {
             let message = "Transcription failed: \(error.localizedDescription)"
             logger.log(message)
@@ -203,32 +229,38 @@ final class PipelineRunner {
         language: String,
         model: String,
         diarization: String,
-        numSpeakers: Int
+        numSpeakers: Int,
     ) async throws -> String {
-        // Ensure the configured model is loaded
+        // Ensure the configured model is loaded. Runs on the service's
+        // MainActor but quickly hands off to a background task for the
+        // expensive compile/prewarm steps WhisperKit performs internally.
         try await transcriptionService.loadModel(name: model)
 
-        // Run transcription
-        let whisperSegments = try await transcriptionService.transcribe(
+        // Transcription and diarization are independent: both consume the
+        // same audio file and produce disjoint segment streams. Run them in
+        // parallel so the pipeline's wall time is dominated by the slower of
+        // the two instead of their sum.
+        async let whisperSegmentsTask = transcriptionService.transcribe(
             audioURL: audioPath,
-            language: language
+            language: language,
         )
 
-        // Run diarization (unless disabled)
-        let diarSegments: [DiarSegment]
-        if diarization == "none" {
-            diarSegments = []
-        } else {
-            diarSegments = try await DiarizationService.diarize(
+        async let diarSegmentsTask: [DiarSegment] = {
+            guard diarization != "none" else { return [] }
+            return try await DiarizationService.diarize(
                 audioURL: audioPath,
-                numSpeakers: numSpeakers > 0 ? numSpeakers : nil
+                numSpeakers: numSpeakers > 0 ? numSpeakers : nil,
             )
-        }
+        }()
 
-        // Merge and format
+        let whisperSegments = try await whisperSegmentsTask
+        let diarSegments = try await diarSegmentsTask
+
+        try Task.checkCancellation()
+
         let labeled = TranscriptFormatter.assignSpeakers(
             whisperSegments: whisperSegments,
-            diarSegments: diarSegments
+            diarSegments: diarSegments,
         )
         return TranscriptFormatter.format(labeled)
     }
@@ -305,24 +337,45 @@ final class PipelineRunner {
     }
 
     /// Re-transcribe a session from its audio.
-    func transcribeSession(_ session: URL, config: AppConfig) async -> CLIResult {
+    ///
+    /// `languageOverride` wins over `config.language` when non-nil. Used by the
+    /// session detail view to run Hebrew on one recording while the global
+    /// default stays on English (or auto).
+    func transcribeSession(
+        _ session: URL,
+        config: AppConfig,
+        languageOverride: String? = nil,
+    ) async -> CLIResult {
         guard let audioPath = SessionManager.audioURL(in: session) else {
             return CLIResult(ok: false, error: "Audio file not found")
         }
         let txPath = session.appendingPathComponent("transcript.txt")
+        let language = languageOverride ?? config.language
 
-        logger.info("re-transcribe: \(audioPath.path)")
+        logger.info("re-transcribe: \(audioPath.path) lang=\(language)")
+
+        let previousState = state
+        state = .transcribing
+        transcribingSession = session
+        defer {
+            transcribingSession = nil
+            if case .transcribing = state { state = previousState }
+        }
 
         do {
             let result = try await transcribeAndFormat(
                 audioPath: audioPath,
-                language: config.language,
+                language: language,
                 model: config.whisperModel,
                 diarization: config.diarization,
-                numSpeakers: config.numSpeakers
+                numSpeakers: config.numSpeakers,
             )
             try result.write(to: txPath, atomically: true, encoding: .utf8)
+            SessionManager.setLanguage(session, language)
             return CLIResult(ok: true, error: "")
+        } catch is CancellationError {
+            logger.info("re-transcribe cancelled")
+            return CLIResult(ok: false, error: "Cancelled")
         } catch {
             logger.error("re-transcribe failed: \(error.localizedDescription)")
             return CLIResult(ok: false, error: error.localizedDescription)

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct HistoryView: View {
@@ -21,51 +22,21 @@ struct HistoryView: View {
         .onAppear {
             refresh()
             profiles = PromptProfileManager.listProfiles()
+            DockVisibility.windowDidAppear()
+        }
+        .onDisappear {
+            DockVisibility.windowDidDisappear()
         }
     }
 
     // MARK: - Sidebar
 
     private var sidebar: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("🍺 Transcribeer")
-                    .font(.headline)
-                Spacer()
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 10)
-            .padding(.bottom, 6)
-
-            List(filteredSessions, selection: $selectedSessionID) { session in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(session.name)
-                        .font(.callout.weight(session.isUntitled ? .regular : .semibold))
-                        .foregroundStyle(session.isUntitled ? .secondary : .primary)
-                        .lineLimit(1)
-
-                    HStack(spacing: 4) {
-                        Text(session.formattedDate)
-                        if !session.duration.isEmpty && session.duration != "—" {
-                            Text("·")
-                            Text(session.duration)
-                        }
-                    }
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-
-                    if !session.snippet.isEmpty {
-                        Text(session.snippet)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .italic()
-                            .lineLimit(1)
-                    }
-                }
-                .padding(.vertical, 2)
-            }
-            .searchable(text: $searchText, prompt: "Search sessions…")
+        List(filteredSessions, selection: $selectedSessionID) { session in
+            SessionRow(session: session)
         }
+        .searchable(text: $searchText, prompt: "Search sessions…")
+        .navigationTitle("Transcribeer")
         .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 380)
         .onChange(of: selectedSessionID) { _, newID in
             loadDetail(sessionID: newID)
@@ -81,6 +52,7 @@ struct HistoryView: View {
                 session: session,
                 detail: detail,
                 profiles: profiles,
+                runner: runner,
                 statusText: $statusText,
                 onRename: { newName in
                     SessionManager.setName(session.path, newName)
@@ -89,27 +61,38 @@ struct HistoryView: View {
                 onSaveNotes: { newNotes in
                     SessionManager.setNotes(session.path, newNotes)
                 },
-                onTranscribe: {
-                    statusText = "Transcribing…"
+                onTranscribe: { languageOverride in
+                    statusText = ""
                     Task {
-                        let r = await runner.transcribeSession(session.path, config: config)
-                        statusText = r.ok ? "Transcription done." : "Transcription failed: \(r.error)"
+                        let result = await runner.transcribeSession(
+                            session.path,
+                            config: config,
+                            languageOverride: languageOverride,
+                        )
+                        statusText = result.ok
+                            ? "Transcription done."
+                            : "Transcription failed: \(result.error)"
                         loadDetail(sessionID: selectedSessionID)
                     }
                 },
                 onSummarize: { profile in
                     statusText = "Summarizing…"
                     Task {
-                        let r = await runner.summarizeSession(
+                        let result = await runner.summarizeSession(
                             session.path, config: config, profile: profile
                         )
-                        statusText = r.ok ? "Summary done." : "Summarization failed: \(r.error)"
+                        statusText = result.ok
+                            ? "Summary done."
+                            : "Summarization failed: \(result.error)"
                         loadDetail(sessionID: selectedSessionID)
                     }
                 },
                 onOpenDir: {
                     NSWorkspace.shared.open(session.path)
-                }
+                },
+                onDelete: {
+                    deleteSession(session)
+                },
             )
         } else {
             ContentUnavailableView(
@@ -140,11 +123,69 @@ struct HistoryView: View {
     }
 
     private func loadDetail(sessionID: String?) {
-        guard let id = sessionID else {
+        guard let sessionID else {
             detail = nil
             return
         }
-        let url = URL(fileURLWithPath: id)
-        detail = SessionManager.sessionDetail(url)
+        detail = SessionManager.sessionDetail(URL(fileURLWithPath: sessionID))
+    }
+
+    private func deleteSession(_ session: Session) {
+        guard SessionManager.deleteSession(session.path) else {
+            statusText = "Failed to delete session."
+            return
+        }
+        statusText = "Session moved to Trash."
+        if selectedSessionID == session.id {
+            selectedSessionID = nil
+            detail = nil
+        }
+        refresh()
+    }
+}
+
+// MARK: - Session row
+
+private struct SessionRow: View {
+    let session: Session
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(session.name)
+                .font(.system(size: 13, weight: session.isUntitled ? .regular : .semibold))
+                .foregroundStyle(session.isUntitled ? .secondary : .primary)
+                .lineLimit(1)
+
+            HStack(spacing: 4) {
+                Text(session.formattedDate)
+                if !session.duration.isEmpty && session.duration != "—" {
+                    Text("·")
+                    Text(session.duration)
+                }
+                if let badge = languageBadge {
+                    Text(badge)
+                        .font(.system(size: 9, weight: .medium))
+                        .tracking(0.5)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Color.secondary.opacity(0.15), in: Capsule())
+                }
+            }
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+
+            if !session.snippet.isEmpty {
+                Text(session.snippet)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .italic()
+                    .lineLimit(1)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var languageBadge: String? {
+        session.language.flatMap { TranscriptionLanguage.from($0).badgeText }
     }
 }

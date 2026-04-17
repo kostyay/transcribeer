@@ -11,6 +11,9 @@ struct Session: Identifiable, Equatable {
     let formattedDate: String
     let duration: String
     let snippet: String
+    /// Raw language code stored in `meta.json` (e.g. `"en"`, `"he"`, `"auto"`).
+    /// `nil` when the session hasn't been transcribed yet.
+    let language: String?
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.id == rhs.id
@@ -28,6 +31,8 @@ struct SessionDetail {
     let canTranscribe: Bool
     let canSummarize: Bool
     let audioURL: URL?
+    /// Per-session language override, or `nil` to fall back to the global default.
+    let language: String?
 }
 
 // MARK: - Session Manager
@@ -37,21 +42,15 @@ enum SessionManager {
     static func listSessions(sessionsDir: String) -> [Session] {
         let dir = URL(fileURLWithPath: (sessionsDir as NSString).expandingTildeInPath)
         guard let contents = try? FileManager.default.contentsOfDirectory(
-            at: dir, includingPropertiesForKeys: [.creationDateKey], options: .skipsHiddenFiles
+            at: dir,
+            includingPropertiesForKeys: [.creationDateKey, .isDirectoryKey],
+            options: .skipsHiddenFiles,
         ) else { return [] }
 
         return contents
-            .filter { url in
-                var isDir: ObjCBool = false
-                FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
-                return isDir.boolValue
-            }
-            .sorted { a, b in
-                let aDate = (try? a.resourceValues(forKeys: [.creationDateKey]))?.creationDate ?? .distantPast
-                let bDate = (try? b.resourceValues(forKeys: [.creationDateKey]))?.creationDate ?? .distantPast
-                return aDate > bDate
-            }
-            .map { sessionRow($0) }
+            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true }
+            .sorted { creationDate(of: $0) > creationDate(of: $1) }
+            .map(sessionRow)
     }
 
     /// Create a new session directory.
@@ -86,7 +85,8 @@ enum SessionManager {
             date: creationDate,
             formattedDate: dateFormatter.string(from: creationDate),
             duration: audioDuration(dir),
-            snippet: snippet(dir)
+            snippet: snippet(dir),
+            language: meta["language"] as? String,
         )
     }
 
@@ -94,6 +94,7 @@ enum SessionManager {
         let meta = readMeta(dir)
         let txPath = dir.appendingPathComponent("transcript.txt")
         let smPath = dir.appendingPathComponent("summary.md")
+        let audio = audioURL(in: dir)
 
         return SessionDetail(
             name: meta["name"] as? String ?? "",
@@ -102,9 +103,10 @@ enum SessionManager {
             duration: audioDuration(dir),
             transcript: (try? String(contentsOf: txPath, encoding: .utf8)) ?? "",
             summary: (try? String(contentsOf: smPath, encoding: .utf8)) ?? "",
-            canTranscribe: audioURL(in: dir) != nil,
+            canTranscribe: audio != nil,
             canSummarize: FileManager.default.fileExists(atPath: txPath.path),
-            audioURL: audioURL(in: dir)
+            audioURL: audio,
+            language: meta["language"] as? String,
         )
     }
 
@@ -138,9 +140,27 @@ enum SessionManager {
         writeMeta(dir, data)
     }
 
+    static func setLanguage(_ dir: URL, _ language: String?) {
+        var data = readMeta(dir)
+        if let language, !language.isEmpty {
+            data["language"] = language
+        } else {
+            data.removeValue(forKey: "language")
+        }
+        writeMeta(dir, data)
+    }
+
     static func displayName(_ dir: URL) -> String {
         let name = readMeta(dir)["name"] as? String ?? ""
         return name.isEmpty ? dir.lastPathComponent : name
+    }
+
+    // MARK: - Destructive operations
+
+    /// Move a session directory to the Trash. Returns `true` on success.
+    @discardableResult
+    static func deleteSession(_ dir: URL) -> Bool {
+        (try? FileManager.default.trashItem(at: dir, resultingItemURL: nil)) != nil
     }
 
     // MARK: - Helpers
@@ -157,11 +177,10 @@ enum SessionManager {
 
     /// Locate the audio file in a session directory (M4A preferred, WAV fallback).
     static func audioURL(in dir: URL) -> URL? {
-        let m4a = dir.appendingPathComponent("audio.m4a")
-        if FileManager.default.fileExists(atPath: m4a.path) { return m4a }
-        let wav = dir.appendingPathComponent("audio.wav")
-        if FileManager.default.fileExists(atPath: wav.path) { return wav }
-        return nil
+        ["audio.m4a", "audio.wav"]
+            .lazy
+            .map(dir.appendingPathComponent)
+            .first { FileManager.default.fileExists(atPath: $0.path) }
     }
 
     /// Audio duration using AVAudioFile — works for any Core Audio format.
