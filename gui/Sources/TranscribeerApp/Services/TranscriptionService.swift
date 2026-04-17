@@ -34,6 +34,13 @@ final class TranscriptionService {
             at: downloadBase, withIntermediateDirectories: true
         )
 
+        let repoPath = repo.isEmpty ? "argmaxinc/whisperkit-coreml" : repo
+        let localModelDir = downloadBase
+            .appendingPathComponent("models")
+            .appendingPathComponent(repoPath)
+            .appendingPathComponent(name)
+        let alreadyDownloaded = FileManager.default.fileExists(atPath: localModelDir.path)
+
         var config = WhisperKitConfig(
             model: name,
             downloadBase: downloadBase,
@@ -41,7 +48,7 @@ final class TranscriptionService {
             logLevel: .none,
             prewarm: true,
             load: true,
-            download: true
+            download: !alreadyDownloaded
         )
         if !repo.isEmpty {
             config.modelRepo = repo

@@ -89,10 +89,14 @@ export PLIST_CONTENT
 
 dev: build-dev
 	@mkdir -p $(LOG_DIR)
-	@launchctl bootout gui/$$(id -u)/$(PLIST_LABEL) 2>/dev/null || true
-	@echo "$$PLIST_CONTENT" > $(PLIST_PATH)
-	launchctl bootstrap gui/$$(id -u) $(PLIST_PATH)
-	@echo "✓ transcribeer dev agent installed and running"
+	@if launchctl list $(PLIST_LABEL) >/dev/null 2>&1; then \
+		launchctl kickstart -k gui/$$(id -u)/$(PLIST_LABEL); \
+		echo "✓ transcribeer restarted (TCC preserved)"; \
+	else \
+		echo "$$PLIST_CONTENT" > $(PLIST_PATH); \
+		launchctl bootstrap gui/$$(id -u) $(PLIST_PATH); \
+		echo "✓ transcribeer dev agent installed and running"; \
+	fi
 	@echo "  logs: $(LOG_DIR)/transcribeer.log"
 
 dev-uninstall:
@@ -111,9 +115,12 @@ gui-build:
 
 build-dev: gui-build
 	@mkdir -p $(APP_MACOS) $(APP_RESOURCES)
-	cp gui/.build/release/TranscribeerApp $(APP_MACOS)/TranscribeerApp
-	@cp $(BIN_DIR)/capture-bin $(APP_MACOS)/capture-bin 2>/dev/null || true
-	cp gui/Info.plist $(APP_CONTENTS)/Info.plist
+	@cmp -s gui/.build/release/TranscribeerApp $(APP_MACOS)/TranscribeerApp || \
+		cp gui/.build/release/TranscribeerApp $(APP_MACOS)/TranscribeerApp
+	@cmp -s $(BIN_DIR)/capture-bin $(APP_MACOS)/capture-bin 2>/dev/null || \
+		cp $(BIN_DIR)/capture-bin $(APP_MACOS)/capture-bin 2>/dev/null || true
+	@cmp -s gui/Info.plist $(APP_CONTENTS)/Info.plist || \
+		cp gui/Info.plist $(APP_CONTENTS)/Info.plist
 	@if [ -f assets/logo.png ]; then \
 		sips -s format icns assets/logo.png --out $(APP_RESOURCES)/AppIcon.icns 2>/dev/null || true; \
 	fi

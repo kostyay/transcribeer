@@ -51,8 +51,10 @@ struct TranscribeerApp: App {
             }
 
         case .recording(let startTime):
-            let elapsed = elapsedString(from: startTime)
-            Text("⏺ Recording  \(elapsed)")
+            TimelineView(.periodic(from: startTime, by: 1)) { context in
+                let elapsed = Int(context.date.timeIntervalSince(startTime))
+                Text("⏺ Recording  \(String(format: "%02d:%02d", elapsed / 60, elapsed % 60))")
+            }
             Button("⏹ Stop Recording") {
                 runner.stopRecording()
             }
@@ -169,12 +171,4 @@ struct TranscribeerApp: App {
         }
     }
 
-    // MARK: - Helpers
-
-    private func elapsedString(from start: Date) -> String {
-        let elapsed = Int(Date().timeIntervalSince(start))
-        let m = elapsed / 60
-        let s = elapsed % 60
-        return String(format: "%02d:%02d", m, s)
-    }
 }
