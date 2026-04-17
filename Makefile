@@ -82,7 +82,7 @@ define PLIST_CONTENT
 endef
 export PLIST_CONTENT
 
-dev: capture build-dev
+dev: build-dev
 	@mkdir -p $(LOG_DIR)
 	@launchctl bootout gui/$$(id -u)/$(PLIST_LABEL) 2>/dev/null || true
 	@echo "$$PLIST_CONTENT" > $(PLIST_PATH)
