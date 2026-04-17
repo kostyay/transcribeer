@@ -73,8 +73,14 @@ struct SettingsView: View {
 
     // MARK: - Transcription
 
-    private static let whisperModels = [
-        "base", "small", "medium", "large-v3", "large-v3-turbo",
+    private static let whisperModels: [(name: String, label: String)] = [
+        ("base",                            "base"),
+        ("small",                           "small"),
+        ("medium",                          "medium"),
+        ("large-v3",                        "large-v3"),
+        ("large-v3-turbo",                  "large-v3-turbo (default)"),
+        ("ivrit-ai_whisper-large-v3-turbo", "ivrit-ai large-v3-turbo (Hebrew)"),
+        ("ivrit-ai_whisper-large-v3",       "ivrit-ai large-v3 (Hebrew, max quality)"),
     ]
 
     private var transcriptionTab: some View {
@@ -84,15 +90,32 @@ struct SettingsView: View {
                     get: { config.whisperModel },
                     set: { config.whisperModel = $0; save() }
                 )) {
-                    ForEach(Self.whisperModels, id: \.self) { model in
-                        Text(model).tag(model)
+                    ForEach(Self.whisperModels, id: \.name) { m in
+                        Text(m.label).tag(m.name)
                     }
+                }
+
+                if config.whisperModel.hasPrefix("ivrit-ai") {
+                    TextField(
+                        "HuggingFace model repo",
+                        text: Binding(
+                            get: { config.whisperModelRepo },
+                            set: { config.whisperModelRepo = $0 }
+                        ),
+                        prompt: Text("username/repo-name-coreml")
+                    )
+                    .onSubmit { save() }
                 }
             } header: {
                 Text("Model")
             } footer: {
-                Text("Models are downloaded on first use (~0.1–1.5 GB). Stored in ~/.transcribeer/models/.")
-                    .foregroundStyle(.secondary)
+                if config.whisperModel.hasPrefix("ivrit-ai") {
+                    Text("Requires a CoreML-converted ivrit-ai model in a HuggingFace repo. See scripts/convert-ivrit-ai.sh.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Models are downloaded on first use (~0.1–1.5 GB). Stored in ~/.transcribeer/models/.")
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section {
