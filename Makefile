@@ -16,7 +16,7 @@ APP_RESOURCES = $(APP_CONTENTS)/Resources
 OBSIDIAN_VAULT ?= $(HOME)/Library/Mobile Documents/com~apple~CloudDocs/$(shell id -un)
 OBSIDIAN_PLUGIN_DIR = $(OBSIDIAN_VAULT)/.obsidian/plugins/transcribeer
 
-.PHONY: gui gui-build build-dev capture test-capture logs help dev dev-uninstall dev-restart obsidian-plugin lint lint-fix lint-strict
+.PHONY: gui gui-build build-dev capture test-capture logs help dev dev-uninstall dev-restart obsidian-plugin lint lint-fix lint-strict clean
 
 help:
 	@echo "dev targets:"
@@ -46,6 +46,11 @@ lint-fix:
 lint-strict:
 	@command -v swiftlint >/dev/null || { echo "swiftlint not installed. Run: brew install swiftlint"; exit 1; }
 	swiftlint lint --strict --config $(PROJECT_DIR)/.swiftlint.yml
+
+# ── clean ─────────────────────────────────────────────────────────────────────
+clean:
+	rm -rf gui/.build capture/.build
+	@echo "✓ build caches cleared"
 
 # ── dev install + launch agent ────────────────────────────────────────────────
 define PLIST_CONTENT
