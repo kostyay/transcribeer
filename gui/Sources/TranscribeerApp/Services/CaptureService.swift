@@ -1,24 +1,20 @@
-import Foundation
 import CaptureCore
-import CoreGraphics
+import Foundation
 
-/// Wraps CaptureCore's AudioCapture for use inside the GUI app.
-/// Runs in-process so TCC permission is checked against TranscribeerApp, not capture-bin.
+/// Thin façade over `AudioCapture` + `AudioFileWriter` for the GUI pipeline.
 enum CaptureService {
-
-    enum CaptureResult {
+    enum Result {
         case recorded
         case noAudio
         case permissionDenied
         case error(String)
     }
 
-    /// Record audio to `audioPath` until `stop()` is called or `duration` elapses.
-    /// Returns a task that completes when recording finishes.
-    static func record(to audioPath: URL, duration: Double?) async -> CaptureResult {
-        let writer = WAVWriter.shared
+    /// Record system audio to `url` until `stop()` is called (or `duration` seconds elapse).
+    static func record(to url: URL, duration: Double?) async -> Result {
+        let writer = AudioFileWriter.shared
         do {
-            try writer.open(path: audioPath.path)
+            try writer.open(url: url)
         } catch {
             return .error("Cannot open output file: \(error.localizedDescription)")
         }
@@ -28,32 +24,32 @@ enum CaptureService {
         } catch {
             writer.close()
             let ns = error as NSError
-            let detail = "SCKit error \(ns.domain)/\(ns.code): \(ns.localizedDescription)"
             if ns.code == -3801 || ns.localizedDescription.lowercased().contains("not authorized") {
                 return .permissionDenied
             }
-            return .error(detail)
+            return .error("SCKit \(ns.domain)/\(ns.code): \(ns.localizedDescription)")
         }
 
         if let duration {
             try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
             AudioCapture.shared.stop()
-            writer.close()
+        } else {
+            // Wait until stop() is called externally (stream delegate fires onStreamStopped).
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                AudioCapture.shared.onStreamStopped = {
+                    continuation.resume()
+                }
+            }
         }
-        // If no duration, caller stops via stopRecording()
 
-        let size = (try? FileManager.default.attributesOfItem(
-            atPath: audioPath.path
-        )[.size] as? UInt64) ?? 0
+        writer.close()
+
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? UInt64) ?? 0
         return size > 0 ? .recorded : .noAudio
     }
 
+    /// Signal the active recording to stop.
     static func stop() {
         AudioCapture.shared.stop()
-        WAVWriter.shared.close()
-    }
-
-    static func hasPermission() -> Bool {
-        CGPreflightScreenCaptureAccess()
     }
 }

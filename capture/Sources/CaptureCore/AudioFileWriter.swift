@@ -5,7 +5,6 @@ public enum AudioFileError: Error {
 }
 
 /// Writes audio samples to a compressed M4A/AAC file via AVAudioFile.
-///
 /// Thread-safe: `append(_:)` and `close()` can be called from any thread.
 public final class AudioFileWriter {
     public static let shared = AudioFileWriter()
@@ -14,11 +13,7 @@ public final class AudioFileWriter {
     private let lock = NSLock()
     private var audioFile: AVAudioFile?
 
-    public func open(
-        url: URL,
-        sampleRate: Double = 16000,
-        channels: Int = 1
-    ) throws {
+    public func open(url: URL, sampleRate: Double = 16000, channels: Int = 1) throws {
         let settings: [String: Any] = [
             AVFormatIDKey: kAudioFormatMPEG4AAC,
             AVSampleRateKey: sampleRate,
@@ -39,8 +34,6 @@ public final class AudioFileWriter {
     }
 
     public func close() {
-        lock.withLock {
-            audioFile = nil
-        }
+        lock.withLock { audioFile = nil }
     }
 }
