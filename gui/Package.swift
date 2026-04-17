@@ -9,6 +9,7 @@ let package = Package(
         .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "0.18.0"),
         .package(url: "https://github.com/bensyverson/LLM.git", branch: "main"),
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.3.0"),
+        .package(path: "../capture"),
     ],
     targets: [
         // Shared business logic — no GUI coupling
@@ -28,6 +29,7 @@ let package = Package(
             name: "TranscribeerApp",
             dependencies: [
                 "TranscribeerCore",
+                .product(name: "CaptureCore", package: "capture"),
             ],
             path: "Sources/TranscribeerApp",
             swiftSettings: [.swiftLanguageMode(.v5)]
@@ -40,6 +42,12 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             path: "Sources/TranscribeerCLI",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .testTarget(
+            name: "TranscribeerCoreTests",
+            dependencies: ["TranscribeerCore"],
+            path: "Tests/TranscribeerCoreTests",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]
