@@ -104,10 +104,10 @@ gui-build:
 	cd gui && swift build -c release -q
 	@echo "✓ gui binary: gui/.build/release/TranscribeerApp"
 
-build-dev: gui-build capture
+build-dev: gui-build
 	@mkdir -p $(APP_MACOS) $(APP_RESOURCES)
 	cp gui/.build/release/TranscribeerApp $(APP_MACOS)/TranscribeerApp
-	cp $(BIN_DIR)/capture-bin $(APP_MACOS)/capture-bin
+	@cp $(BIN_DIR)/capture-bin $(APP_MACOS)/capture-bin 2>/dev/null || true
 	cp gui/Info.plist $(APP_CONTENTS)/Info.plist
 	@if [ -f assets/logo.png ]; then \
 		sips -s format icns assets/logo.png --out $(APP_RESOURCES)/AppIcon.icns 2>/dev/null || true; \
