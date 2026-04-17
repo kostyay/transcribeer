@@ -15,7 +15,13 @@ enum SummarizationService {
         Respond in markdown.
         """
 
-    /// Summarize a transcript using the configured LLM backend.
+    /// Stream a summary as incremental text deltas. Consumers should concatenate
+    /// the yielded fragments for the running total. The stream finishes when
+    /// the model is done; no `.completed` sentinel is emitted.
+    ///
+    /// `LLM` is an actor, so its `streamConversation` factory is implicitly
+    /// async — hence this method is async even though the heavy lifting
+    /// happens inside the returned stream.
     ///
     /// - Parameters:
     ///   - transcript: Full transcript text.
@@ -23,27 +29,44 @@ enum SummarizationService {
     ///   - model: Model name (e.g. "gpt-4o", "claude-sonnet-4-20250514", "gemini-2.0-flash").
     ///   - ollamaHost: Ollama base URL (default: localhost:11434).
     ///   - prompt: Custom system prompt, or nil for default.
-    static func summarize(
+    static func streamSummarize(
         transcript: String,
         backend: String,
         model: String,
         ollamaHost: String = "http://localhost:11434",
-        prompt: String? = nil
-    ) async throws -> String {
+        prompt: String? = nil,
+    ) async throws -> AsyncThrowingStream<String, Error> {
         guard let kind = LLMBackend(rawValue: backend) else {
             throw SummarizationError.unknownBackend(backend)
         }
         let (provider, resolvedModel) = try resolveProvider(kind, model: model, ollamaHost: ollamaHost)
 
         let llm = LLM(provider: provider)
-        let config = LLM.ChatConfiguration(
-            systemPrompt: prompt ?? defaultPrompt,
-            user: transcript,
+        let config = LLM.ConversationConfiguration(
             modelType: .fast,
             inference: .direct,
             model: .init(rawValue: resolvedModel)
         )
-        return try await llm.chat(configuration: config)
+        let source = await llm.streamConversation(
+            systemPrompt: prompt ?? defaultPrompt,
+            userMessage: transcript,
+            configuration: config,
+        )
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    for try await event in source {
+                        if case let .textDelta(fragment) = event, !fragment.isEmpty {
+                            continuation.yield(fragment)
+                        }
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 
     /// Load a prompt profile from ~/.transcribeer/prompts/<name>.md.
@@ -64,7 +87,7 @@ enum SummarizationService {
     private static func resolveProvider(
         _ backend: LLMBackend,
         model: String,
-        ollamaHost: String
+        ollamaHost: String,
     ) throws -> (LLM.Provider, String) {
         switch backend {
         case .openai:

@@ -41,6 +41,14 @@ final class PipelineRunner {
     /// the detail view can decide whether to render the live preview.
     var transcribingSession: URL?
 
+    /// Which session is actively being summarized right now, if any. Drives
+    /// the live markdown preview while the LLM streams deltas.
+    var summarizingSession: URL?
+
+    /// Running accumulator of streamed summary text for `summarizingSession`.
+    /// Cleared when the stream finishes or a new summary starts.
+    var liveSummary: String = ""
+
     /// Transcription progress (0..1), driven by WhisperKit.
     var transcriptionProgress: Double? { transcriptionService.progress }
 
@@ -49,6 +57,7 @@ final class PipelineRunner {
     private var captureProcess: Process?
     private var pipelineTask: Task<Void, Never>?
     private var processingTask: Task<Void, Never>?
+    private var summarizeTask: Task<CLIResult, Never>?
 
     func startRecording(config: AppConfig) {
         guard !state.isBusy else { return }
@@ -78,6 +87,8 @@ final class PipelineRunner {
             transcriptionService.cancel()
             processingTask?.cancel()
             pipelineTask?.cancel()
+            summarizeTask?.cancel()
+            summarizeTask = nil
         default:
             break
         }
@@ -202,19 +213,55 @@ final class PipelineRunner {
         do {
             let transcript = try String(contentsOf: transcriptPath, encoding: .utf8)
             let customPrompt = SummarizationService.loadPromptProfile(promptProfile)
-            let summary = try await SummarizationService.summarize(
+            _ = try await streamSummary(
+                session: transcriptPath.deletingLastPathComponent(),
                 transcript: transcript,
-                backend: config.llmBackend,
-                model: config.llmModel,
-                ollamaHost: config.ollamaHost,
-                prompt: customPrompt
+                summaryPath: summaryPath,
+                config: config,
+                prompt: customPrompt,
             )
-            try summary.write(to: summaryPath, atomically: true, encoding: .utf8)
             logger.log("summarization done")
         } catch {
             logger.log("summarization failed: \(error.localizedDescription)")
             // Non-fatal — transcript is what matters.
         }
+    }
+
+    /// Stream summary deltas from the LLM, mirroring them into `liveSummary`
+    /// for the detail view to render in real time. Writes the final text to
+    /// `summaryPath` before clearing the live state, so there is no flash of
+    /// stale disk content between stream-end and the caller's reload.
+    private func streamSummary(
+        session: URL,
+        transcript: String,
+        summaryPath: URL,
+        config: AppConfig,
+        prompt: String?,
+    ) async throws -> String {
+        summarizingSession = session
+        liveSummary = ""
+        // Clear on any exit path — success, throw, or cancellation.
+        defer {
+            summarizingSession = nil
+            liveSummary = ""
+        }
+
+        let stream = try await SummarizationService.streamSummarize(
+            transcript: transcript,
+            backend: config.llmBackend,
+            model: config.llmModel,
+            ollamaHost: config.ollamaHost,
+            prompt: prompt,
+        )
+
+        var accumulated = ""
+        for try await fragment in stream {
+            try Task.checkCancellation()
+            accumulated += fragment
+            liveSummary = accumulated
+        }
+        try accumulated.write(to: summaryPath, atomically: true, encoding: .utf8)
+        return accumulated
     }
 
     private func finishSession(_ session: URL) {
@@ -382,11 +429,24 @@ final class PipelineRunner {
         }
     }
 
+    /// Optional one-shot overrides for a single re-summarize call.
+    ///
+    /// `backend`/`model` let the detail view pick a different LLM without
+    /// touching the global config. `focus` is a free-form user note appended
+    /// to the system prompt — typically "focus on X" — so people can steer
+    /// a summary towards a topic without creating a new prompt profile.
+    struct SummarizeOverrides {
+        var backend: String?
+        var model: String?
+        var focus: String?
+    }
+
     /// Re-summarize a session from its transcript.
     func summarizeSession(
         _ session: URL,
         config: AppConfig,
-        profile: String?
+        profile: String?,
+        overrides: SummarizeOverrides = .init(),
     ) async -> CLIResult {
         let txPath = session.appendingPathComponent("transcript.txt")
         let smPath = session.appendingPathComponent("summary.md")
@@ -395,23 +455,72 @@ final class PipelineRunner {
             return CLIResult(ok: false, error: "Transcript file not found")
         }
 
-        logger.info("re-summarize: \(txPath.path)")
+        let effectiveConfig = applyOverrides(overrides, to: config)
+        logger.info(
+            "re-summarize: \(txPath.path) backend=\(effectiveConfig.llmBackend) model=\(effectiveConfig.llmModel)",
+        )
 
-        do {
-            let transcript = try String(contentsOf: txPath, encoding: .utf8)
-            let customPrompt = SummarizationService.loadPromptProfile(profile)
-            let summary = try await SummarizationService.summarize(
-                transcript: transcript,
-                backend: config.llmBackend,
-                model: config.llmModel,
-                ollamaHost: config.ollamaHost,
-                prompt: customPrompt
-            )
-            try summary.write(to: smPath, atomically: true, encoding: .utf8)
-            return CLIResult(ok: true, error: "")
-        } catch {
-            logger.error("re-summarize failed: \(error.localizedDescription)")
-            return CLIResult(ok: false, error: error.localizedDescription)
+        let previousState = state
+        state = .summarizing
+
+        // Run inside a stored Task so `cancelProcessing` can tear it down
+        // mid-stream — the caller's Task isn't reachable from the runner.
+        let work: Task<CLIResult, Never> = Task { [weak self] in
+            guard let self else { return CLIResult(ok: false, error: "Cancelled") }
+            do {
+                let transcript = try String(contentsOf: txPath, encoding: .utf8)
+                let basePrompt = SummarizationService.loadPromptProfile(profile)
+                let prompt = Self.composePrompt(base: basePrompt, focus: overrides.focus)
+                _ = try await self.streamSummary(
+                    session: session,
+                    transcript: transcript,
+                    summaryPath: smPath,
+                    config: effectiveConfig,
+                    prompt: prompt,
+                )
+                return CLIResult(ok: true, error: "")
+            } catch is CancellationError {
+                return CLIResult(ok: false, error: "Cancelled")
+            } catch {
+                return CLIResult(ok: false, error: error.localizedDescription)
+            }
         }
+        summarizeTask = work
+        let result = await work.value
+        summarizeTask = nil
+        if case .summarizing = state { state = previousState }
+
+        if !result.ok, result.error == "Cancelled" {
+            logger.info("re-summarize cancelled")
+        } else if !result.ok {
+            logger.error("re-summarize failed: \(result.error)")
+        }
+        return result
+    }
+
+    /// Produce a config with backend/model swapped when the caller supplied
+    /// overrides. Keeps the original config untouched so the user's saved
+    /// preferences aren't mutated by a one-off regenerate.
+    private func applyOverrides(_ overrides: SummarizeOverrides, to config: AppConfig) -> AppConfig {
+        var copy = config
+        if let backend = overrides.backend, !backend.isEmpty {
+            copy.llmBackend = backend
+        }
+        if let model = overrides.model, !model.isEmpty {
+            copy.llmModel = model
+        }
+        return copy
+    }
+
+    /// Combine the profile prompt (or the built-in default) with an optional
+    /// free-form focus instruction. Returns `nil` when there's nothing to
+    /// override — the service will fall back to `defaultPrompt`.
+    static func composePrompt(base: String?, focus: String?) -> String? {
+        let trimmedFocus = focus?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let trimmedFocus, !trimmedFocus.isEmpty {
+            let root = base ?? SummarizationService.defaultPrompt
+            return root + "\n\nAdditional instructions from the user:\n" + trimmedFocus
+        }
+        return base
     }
 }

@@ -53,6 +53,7 @@ struct HistoryView: View {
                 detail: detail,
                 profiles: profiles,
                 runner: runner,
+                config: config,
                 statusText: $statusText,
                 onRename: { newName in
                     SessionManager.setName(session.path, newName)
@@ -75,11 +76,18 @@ struct HistoryView: View {
                         loadDetail(sessionID: selectedSessionID)
                     }
                 },
-                onSummarize: { profile in
+                onSummarize: { request in
                     statusText = "Summarizing…"
                     Task {
                         let result = await runner.summarizeSession(
-                            session.path, config: config, profile: profile
+                            session.path,
+                            config: config,
+                            profile: request.profile,
+                            overrides: .init(
+                                backend: request.backend,
+                                model: request.model,
+                                focus: request.focus,
+                            ),
                         )
                         statusText = result.ok
                             ? "Summary done."
@@ -151,10 +159,14 @@ private struct SessionRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(session.name)
-                .font(.system(size: 13, weight: session.isUntitled ? .regular : .semibold))
-                .foregroundStyle(session.isUntitled ? .secondary : .primary)
-                .lineLimit(1)
+            HStack(spacing: 6) {
+                Text(session.name)
+                    .font(.system(size: 13, weight: session.isUntitled ? .regular : .semibold))
+                    .foregroundStyle(session.isUntitled ? .secondary : .primary)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                artifactIcons
+            }
 
             HStack(spacing: 4) {
                 Text(session.formattedDate)
@@ -183,6 +195,39 @@ private struct SessionRow: View {
             }
         }
         .padding(.vertical, 2)
+    }
+
+    /// Small glyph trio on the right of each row showing which artifacts
+    /// exist for the session: audio, transcript, summary. A dimmed glyph
+    /// means the artifact is missing — so users can see at a glance whether
+    /// a session still needs transcribing or summarizing.
+    @ViewBuilder
+    private var artifactIcons: some View {
+        HStack(spacing: 4) {
+            artifactIcon(
+                systemName: "waveform",
+                present: session.hasAudio,
+                help: session.hasAudio ? "Audio recorded" : "No audio",
+            )
+            artifactIcon(
+                systemName: "text.alignleft",
+                present: session.hasTranscript,
+                help: session.hasTranscript ? "Transcript available" : "Not transcribed",
+            )
+            artifactIcon(
+                systemName: "sparkles",
+                present: session.hasSummary,
+                help: session.hasSummary ? "Summary available" : "Not summarized",
+            )
+        }
+    }
+
+    private func artifactIcon(systemName: String, present: Bool, help: String) -> some View {
+        Image(systemName: systemName)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(present ? Color.accentColor : Color.secondary.opacity(0.35))
+            .help(help)
+            .accessibilityLabel(help)
     }
 
     private var languageBadge: String? {

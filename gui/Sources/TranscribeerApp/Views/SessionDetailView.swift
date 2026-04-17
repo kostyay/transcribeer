@@ -7,24 +7,41 @@ struct SessionDetailView: View {
     let detail: SessionDetail
     let profiles: [String]
     let runner: PipelineRunner
+    /// Used to seed the summary model picker with the app-wide default and
+    /// to resolve the Ollama host when fetching live model tags.
+    let config: AppConfig
     @Binding var statusText: String
     let onRename: (String) -> Void
     let onSaveNotes: (String) -> Void
     let onTranscribe: (String?) -> Void
-    let onSummarize: (String?) -> Void
+    let onSummarize: (SummaryRequest) -> Void
     let onOpenDir: () -> Void
     let onDelete: () -> Void
+
+    /// Everything the detail view wants to override for a single regenerate:
+    /// prompt profile, model, and one-shot "focus on X" instructions. A nil
+    /// field means "use the app-wide default."
+    struct SummaryRequest {
+        var profile: String?
+        var backend: String?
+        var model: String?
+        var focus: String?
+    }
 
     @State private var name: String = ""
     @State private var notes: String = ""
     @State private var activeTab: Tab = .summary
     @State private var selectedProfile = "default"
+    @State private var selectedSummaryModel: SummaryModelOption?
+    @State private var summaryFocus: String = ""
+    @State private var summaryModelOptions: [SummaryModelOption] = []
     @State private var selectedLanguage: TranscriptionLanguage = .auto
     @State private var notesSaveTask: Task<Void, Never>?
     @State private var progressStartedAt: Date?
     @State private var etaEstimator = ETAEstimator()
     @State private var showDeleteConfirm = false
     @State private var statusClearTask: Task<Void, Never>?
+    @State private var summaryStartedAt: Date?
     /// Shared audio player VM. Owned here so the transcript rows can seek
     /// the same player instance the `AudioPlayerView` drives.
     @State private var playerVM = AudioPlayerVM()
@@ -53,7 +70,11 @@ struct SessionDetailView: View {
 
             if showProgressRow {
                 Divider()
-                transcriptionProgressRow
+                TranscriptionProgressRow(
+                    runner: runner,
+                    startedAt: progressStartedAt,
+                    etaEstimator: etaEstimator,
+                )
             }
         }
         .toolbar {
@@ -91,6 +112,9 @@ struct SessionDetailView: View {
             Text("The session folder will be moved to the Trash.")
         }
         .onAppear { syncFields() }
+        // `.task(id:)` runs on first appear *and* whenever the host changes,
+        // so there's no need for a separate plain `.task`.
+        .task(id: config.ollamaHost) { await refreshSummaryModels() }
         .onChange(of: session.id) { _, _ in syncFields() }
         .onChange(of: detail.language) { _, _ in syncLanguage() }
         .onChange(of: statusText) { _, newValue in scheduleStatusClear(for: newValue) }
@@ -98,12 +122,42 @@ struct SessionDetailView: View {
             progressStartedAt = isVisible ? (progressStartedAt ?? Date()) : nil
             if !isVisible { etaEstimator.reset() }
         }
+        .onChange(of: isSummarizingThisSession) { _, isActive in
+            summaryStartedAt = isActive ? (summaryStartedAt ?? Date()) : nil
+        }
     }
 
+    /// Reset per-session editable state. Called on first load and whenever
+    /// the selected session changes so nothing leaks between sessions.
     private func syncFields() {
         name = detail.name
         notes = detail.notes
+        summaryFocus = ""
+        selectedSummaryModel = defaultSummaryModel
         syncLanguage()
+    }
+
+    private var defaultSummaryModel: SummaryModelOption {
+        SummaryModelOption(
+            backend: LLMBackend.from(config.llmBackend),
+            model: config.llmModel,
+        )
+    }
+
+    /// Fetch live Ollama tags + combine with the static catalog so the model
+    /// picker reflects both cloud models and whatever the user has pulled
+    /// locally. Runs on first appearance and when the Ollama host changes.
+    private func refreshSummaryModels() async {
+        let ollamaModels = await SummarizationCatalog.fetchOllamaModels(host: config.ollamaHost)
+        let options = SummarizationCatalog.optionsIncludingDefault(
+            default: defaultSummaryModel,
+            ollamaModels: ollamaModels,
+        )
+        summaryModelOptions = options
+        if let current = selectedSummaryModel,
+           !options.contains(where: { $0.id == current.id }) {
+            selectedSummaryModel = defaultSummaryModel
+        }
     }
 
     private func syncLanguage() {
@@ -154,25 +208,7 @@ struct SessionDetailView: View {
     private var contextualAction: some View {
         switch activeTab {
         case .summary:
-            HStack(spacing: 8) {
-                Picker("Profile", selection: $selectedProfile) {
-                    ForEach(profiles, id: \.self) { profile in
-                        Text(profile).tag(profile)
-                    }
-                }
-                .labelsHidden()
-                .fixedSize()
-                .controlSize(.small)
-                .help("Prompt profile for summarization")
-
-                Button {
-                    onSummarize(selectedProfile == "default" ? nil : selectedProfile)
-                } label: {
-                    Label("Regenerate", systemImage: "arrow.clockwise")
-                }
-                .controlSize(.small)
-                .disabled(!detail.canSummarize)
-            }
+            summaryTabBarAction
 
         case .transcript:
             HStack(spacing: 8) {
@@ -211,22 +247,83 @@ struct SessionDetailView: View {
         }
     }
 
-    @ViewBuilder
-    private var summaryView: some View {
-        ScrollView {
-            if detail.summary.isEmpty {
-                emptyState("No summary yet.")
-            } else {
-                Text(detail.summary)
-                    .font(.system(size: 13))
-                    .lineSpacing(4)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 16)
-            }
+    /// Regenerate button — the only summary-tab action that fits on the tab
+    /// bar row. Profile / model / focus live in their own controls row below
+    /// so people aren't scrolled sideways on smaller windows.
+    private var summaryTabBarAction: some View {
+        Button {
+            triggerSummarize()
+        } label: {
+            Label(
+                isSummarizingThisSession ? "Stop" : "Regenerate",
+                systemImage: isSummarizingThisSession ? "stop.fill" : "arrow.clockwise",
+            )
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .controlSize(.small)
+        .disabled(!detail.canSummarize && !isSummarizingThisSession)
+        .help(isSummarizingThisSession
+              ? "Stop the current summarization"
+              : "Regenerate summary with the options below")
+    }
+
+    private func triggerSummarize() {
+        guard !isSummarizingThisSession else {
+            runner.cancelProcessing()
+            return
+        }
+        onSummarize(.init(
+            profile: selectedProfile == "default" ? nil : selectedProfile,
+            backend: selectedSummaryModel?.backend.rawValue,
+            model: selectedSummaryModel?.model,
+            focus: summaryFocus.trimmingCharacters(in: .whitespacesAndNewlines),
+        ))
+    }
+
+    private var summaryView: some View {
+        VStack(spacing: 0) {
+            summaryControlsRow
+            Divider()
+            summaryBody
+        }
+    }
+
+    @ViewBuilder
+    private var summaryBody: some View {
+        if summaryText.isEmpty {
+            ScrollView {
+                emptyState(isSummarizingThisSession ? "Summarizing…" : "No summary yet.")
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            SummaryMarkdownView(text: summaryText)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    /// While the LLM is streaming for *this* session, render the in-memory
+    /// accumulator so users see text land as it arrives. Otherwise show the
+    /// on-disk summary — that's the canonical store.
+    private var summaryText: String {
+        isSummarizingThisSession ? runner.liveSummary : detail.summary
+    }
+
+    private var isSummarizingThisSession: Bool {
+        runner.summarizingSession?.path == session.path.path
+    }
+
+    // MARK: - Summary controls row
+
+    private var summaryControlsRow: some View {
+        SummaryControlsRow(
+            profiles: profiles,
+            modelOptions: summaryModelOptions,
+            isBusy: isSummarizingThisSession,
+            summaryStartedAt: summaryStartedAt,
+            selectedProfile: $selectedProfile,
+            selectedModel: $selectedSummaryModel,
+            focus: $summaryFocus,
+            onSubmit: triggerSummarize,
+        )
     }
 
     @ViewBuilder
@@ -337,9 +434,7 @@ struct SessionDetailView: View {
         statusClearTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(isError ? 6 : 3))
             guard !Task.isCancelled else { return }
-            withAnimation(.easeInOut(duration: 0.2)) {
-                statusText = ""
-            }
+            withAnimation(.easeInOut(duration: 0.2)) { statusText = "" }
         }
     }
 
@@ -371,81 +466,5 @@ struct SessionDetailView: View {
     private var showProgressRow: Bool {
         runner.transcriptionProgress != nil
             || runner.transcriptionService.modelState.isBusy
-    }
-
-    /// Shows WhisperKit model load / transcription progress while the runner is busy.
-    @ViewBuilder
-    private var transcriptionProgressRow: some View {
-        let modelState = runner.transcriptionService.modelState
-        let progress = runner.transcriptionProgress
-
-        HStack(spacing: 12) {
-            Text(progressLabel(modelState: modelState, progress: progress))
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-                .frame(minWidth: 140, alignment: .leading)
-
-            if let progress {
-                ProgressView(value: progress)
-                    .progressViewStyle(.linear)
-                Text("\(Int(progress * 100))%")
-                    .font(.system(size: 12).monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .frame(width: 36, alignment: .trailing)
-            } else {
-                ProgressView()
-                    .progressViewStyle(.linear)
-            }
-
-            if let startedAt = progressStartedAt {
-                TimelineView(.periodic(from: startedAt, by: 1)) { ctx in
-                    Text(timerLabel(startedAt: startedAt, now: ctx.date, progress: progress))
-                        .font(.system(size: 12).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .frame(minWidth: 140, alignment: .trailing)
-                }
-            }
-
-            Button {
-                runner.cancelProcessing()
-            } label: {
-                Label("Stop", systemImage: "stop.fill")
-                    .labelStyle(.iconOnly)
-            }
-            .buttonStyle(.borderless)
-            .controlSize(.small)
-            .help("Stop transcription")
-            .accessibilityLabel("Stop transcription")
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-    }
-
-    /// `01:23` while warming up, `01:23 · ~00:45 left` once ETA is stable.
-    private func timerLabel(startedAt: Date, now: Date, progress: Double?) -> String {
-        let elapsed = max(0, now.timeIntervalSince(startedAt))
-        let elapsedString = formatMMSS(Int(elapsed))
-        guard let progress, let eta = etaEstimator.estimate(progress: progress, elapsed: elapsed) else {
-            return elapsedString
-        }
-        return "\(elapsedString) · ~\(formatMMSS(Int(eta.rounded()))) left"
-    }
-
-    private func formatMMSS(_ seconds: Int) -> String {
-        let clamped = max(0, seconds)
-        return String(format: "%02d:%02d", clamped / 60, clamped % 60)
-    }
-
-    private func progressLabel(modelState: ModelState, progress: Double?) -> String {
-        guard progress == nil else { return "Transcribing…" }
-        return switch modelState {
-        case .downloading: "Downloading model…"
-        case .downloaded: "Model downloaded"
-        case .prewarming: "Preparing model…"
-        case .prewarmed: "Model ready"
-        case .loading: "Loading model…"
-        case .unloading: "Unloading model…"
-        case .loaded, .unloaded: "Transcribing…"
-        }
     }
 }

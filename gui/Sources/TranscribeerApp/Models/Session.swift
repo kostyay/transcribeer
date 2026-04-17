@@ -14,6 +14,10 @@ struct Session: Identifiable, Equatable {
     /// Raw language code stored in `meta.json` (e.g. `"en"`, `"he"`, `"auto"`).
     /// `nil` when the session hasn't been transcribed yet.
     let language: String?
+    /// Pipeline artifacts present on disk. Drives the sidebar status icons.
+    let hasAudio: Bool
+    let hasTranscript: Bool
+    let hasSummary: Bool
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.id == rhs.id
@@ -76,6 +80,13 @@ enum SessionManager {
         let rawName = meta["name"] as? String ?? ""
         let displayName = rawName.isEmpty ? dir.lastPathComponent : rawName
         let creationDate = creationDate(of: dir)
+        let fileManager = FileManager.default
+        let hasTranscript = fileManager.fileExists(
+            atPath: dir.appendingPathComponent("transcript.txt").path,
+        )
+        let hasSummary = fileManager.fileExists(
+            atPath: dir.appendingPathComponent("summary.md").path,
+        )
 
         return Session(
             id: dir.path,
@@ -87,6 +98,9 @@ enum SessionManager {
             duration: audioDuration(dir),
             snippet: snippet(dir),
             language: meta["language"] as? String,
+            hasAudio: audioURL(in: dir) != nil,
+            hasTranscript: hasTranscript,
+            hasSummary: hasSummary,
         )
     }
 
@@ -194,16 +208,30 @@ enum SessionManager {
     }
 
     private static func snippet(_ dir: URL) -> String {
-        for fname in ["summary.md", "transcript.txt"] {
-            let path = dir.appendingPathComponent(fname)
-            guard let text = try? String(contentsOf: path, encoding: .utf8) else { continue }
-            if let first = text.components(separatedBy: .newlines)
-                .lazy
-                .map({ $0.trimmingCharacters(in: .whitespaces) })
-                .first(where: { !$0.isEmpty }) {
-                return String(first.prefix(120))
+        let summaryPath = dir.appendingPathComponent("summary.md")
+        if let text = try? String(contentsOf: summaryPath, encoding: .utf8),
+           let first = firstNonEmptyLine(text) {
+            return String(first.prefix(120))
+        }
+        let transcriptPath = dir.appendingPathComponent("transcript.txt")
+        if let text = try? String(contentsOf: transcriptPath, encoding: .utf8) {
+            // Prefer the parsed shape so special tokens and `[MM:SS]` headers
+            // don't leak into the sidebar. Fall back to sanitized raw text for
+            // transcripts that don't match the speaker-line format.
+            if let firstLine = TranscriptFormatter.parse(text).first, !firstLine.text.isEmpty {
+                return String(firstLine.text.prefix(120))
+            }
+            if let first = firstNonEmptyLine(text) {
+                return String(TranscriptFormatter.sanitize(first).prefix(120))
             }
         }
         return ""
+    }
+
+    private static func firstNonEmptyLine(_ text: String) -> String? {
+        text.components(separatedBy: .newlines)
+            .lazy
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { !$0.isEmpty }
     }
 }

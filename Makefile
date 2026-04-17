@@ -115,8 +115,24 @@ build-dev: gui-build
 	cp gui/.build/release/TranscribeerApp $(APP_MACOS)/TranscribeerApp
 	cp gui/Info.plist $(APP_CONTENTS)/Info.plist
 	@if [ -f assets/logo.png ]; then \
-		sips -s format icns assets/logo.png --out $(APP_RESOURCES)/AppIcon.icns 2>/dev/null || true; \
+		iconset_root="$$(mktemp -d /tmp/transcribeer-iconset.XXXXXX)"; \
+		iconset_dir="$$iconset_root/AppIcon.iconset"; \
+		mkdir -p "$$iconset_dir"; \
+		sips -z 16 16 assets/logo.png --out "$$iconset_dir/icon_16x16.png" >/dev/null; \
+		sips -z 32 32 assets/logo.png --out "$$iconset_dir/icon_16x16@2x.png" >/dev/null; \
+		sips -z 32 32 assets/logo.png --out "$$iconset_dir/icon_32x32.png" >/dev/null; \
+		sips -z 64 64 assets/logo.png --out "$$iconset_dir/icon_32x32@2x.png" >/dev/null; \
+		sips -z 128 128 assets/logo.png --out "$$iconset_dir/icon_128x128.png" >/dev/null; \
+		sips -z 256 256 assets/logo.png --out "$$iconset_dir/icon_128x128@2x.png" >/dev/null; \
+		sips -z 256 256 assets/logo.png --out "$$iconset_dir/icon_256x256.png" >/dev/null; \
+		sips -z 512 512 assets/logo.png --out "$$iconset_dir/icon_256x256@2x.png" >/dev/null; \
+		sips -z 512 512 assets/logo.png --out "$$iconset_dir/icon_512x512.png" >/dev/null; \
+		sips -z 1024 1024 assets/logo.png --out "$$iconset_dir/icon_512x512@2x.png" >/dev/null; \
+		rm -f $(APP_RESOURCES)/AppIcon.icns; \
+		iconutil --convert icns --output $(APP_RESOURCES)/AppIcon.icns "$$iconset_dir"; \
+		rm -rf "$$iconset_root"; \
 	fi
+	@touch $(APP_BUNDLE)
 	@echo "✓ app bundle: $(APP_BUNDLE)"
 
 gui: build-dev
