@@ -2,7 +2,6 @@ import XCTest
 @testable import TranscribeerCore
 
 final class AudioChunkerTests: XCTestCase {
-
     // MARK: - Helpers
 
     /// Build a minimal PCM WAV with the given number of silent (zero) samples.
@@ -11,14 +10,14 @@ final class AudioChunkerTests: XCTestCase {
         var h = Data(count: 44)
         func w32(_ off: Int, _ v: UInt32) {
             var le = v.littleEndian
-            withUnsafeBytes(of: &le) { h.replaceSubrange(off..<(off+4), with: $0) }
+            withUnsafeBytes(of: &le) { h.replaceSubrange(off..<(off + 4), with: $0) }
         }
         func w16(_ off: Int, _ v: UInt16) {
             var le = v.littleEndian
-            withUnsafeBytes(of: &le) { h.replaceSubrange(off..<(off+2), with: $0) }
+            withUnsafeBytes(of: &le) { h.replaceSubrange(off..<(off + 2), with: $0) }
         }
         h[0...3]   = Data([0x52, 0x49, 0x46, 0x46]) // RIFF
-        w32(4,  36 + UInt32(pcm.count))
+        w32(4, 36 + UInt32(pcm.count))
         h[8...11]  = Data([0x57, 0x41, 0x56, 0x45]) // WAVE
         h[12...15] = Data([0x66, 0x6d, 0x74, 0x20]) // fmt
         w32(16, 16)
@@ -46,15 +45,16 @@ final class AudioChunkerTests: XCTestCase {
         let wav = makeWAV(sampleRate: 16000, samples: 16000)
         let url = try writeTemp(wav)
         defer { try? FileManager.default.removeItem(at: url) }
-        let duration = AudioChunker.wavDuration(url: url)
-        XCTAssertEqual(duration!, 1.0, accuracy: 0.001)
+        let duration = try XCTUnwrap(AudioChunker.wavDuration(url: url))
+        XCTAssertEqual(duration, 1.0, accuracy: 0.001)
     }
 
     func testWavDurationFor5Seconds() throws {
         let wav = makeWAV(sampleRate: 16000, samples: 80000)
         let url = try writeTemp(wav)
         defer { try? FileManager.default.removeItem(at: url) }
-        XCTAssertEqual(AudioChunker.wavDuration(url: url)!, 5.0, accuracy: 0.001)
+        let duration = try XCTUnwrap(AudioChunker.wavDuration(url: url))
+        XCTAssertEqual(duration, 5.0, accuracy: 0.001)
     }
 
     func testWavDurationReturnsNilForTruncatedFile() throws {
@@ -111,8 +111,8 @@ final class AudioChunkerTests: XCTestCase {
             XCTAssertTrue(FileManager.default.fileExists(atPath: chunk.url.path))
             let d = try Data(contentsOf: chunk.url)
             XCTAssertEqual(d[0...3], Data([0x52, 0x49, 0x46, 0x46])) // RIFF
-            let dur = AudioChunker.wavDuration(url: chunk.url)
-            XCTAssertEqual(dur!, 1.0, accuracy: 0.01)
+            let dur = try XCTUnwrap(AudioChunker.wavDuration(url: chunk.url))
+            XCTAssertEqual(dur, 1.0, accuracy: 0.01)
         }
     }
 

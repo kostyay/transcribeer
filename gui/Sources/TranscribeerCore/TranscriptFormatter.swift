@@ -10,7 +10,6 @@ public struct LabeledSegment: Sendable {
 
 /// Merges Whisper segments with diarization and formats the transcript.
 public enum TranscriptFormatter {
-
     /// Assign a speaker label to each Whisper segment based on overlap
     /// with diarization segments. Falls back to midpoint containment.
     public static func assignSpeakers(
@@ -34,8 +33,10 @@ public enum TranscriptFormatter {
             }
 
             return LabeledSegment(
-                start: ws.start, end: ws.end,
-                speaker: bestSpeaker, text: ws.text
+                start: ws.start,
+                end: ws.end,
+                speaker: bestSpeaker,
+                text: ws.text
             )
         }
     }
@@ -55,14 +56,15 @@ public enum TranscriptFormatter {
         }
         speakerMap["UNKNOWN"] = "???"
 
-        var merged: [(start: Double, end: Double, speaker: String, text: String)] = []
+        var merged: [LabeledSegment] = []
         for seg in segments {
             let friendly = speakerMap[seg.speaker] ?? seg.speaker
             if let last = merged.last, last.speaker == friendly {
                 let prev = merged.removeLast()
-                merged.append((prev.start, seg.end, friendly, prev.text + " " + seg.text))
+                let merged_text = prev.text + " " + seg.text
+                merged.append(LabeledSegment(start: prev.start, end: seg.end, speaker: friendly, text: merged_text))
             } else {
-                merged.append((seg.start, seg.end, friendly, seg.text))
+                merged.append(LabeledSegment(start: seg.start, end: seg.end, speaker: friendly, text: seg.text))
             }
         }
 

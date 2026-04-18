@@ -2,7 +2,6 @@ import XCTest
 @testable import TranscribeerCore
 
 final class ChunkedTranscriberTests: XCTestCase {
-
     func testMergeEmptyChunksReturnsEmpty() {
         let result = ChunkedTranscriber.mergeChunkResults([])
         XCTAssertTrue(result.isEmpty)
@@ -28,8 +27,8 @@ final class ChunkedTranscriberTests: XCTestCase {
     }
 
     func testMergeMultipleChunksSortedByStart() {
-        let chunk0 = (offset: 0.0,   segments: [TranscriptSegment(start: 5, end: 10, text: "A")])
-        let chunk1 = (offset: 600.0, segments: [TranscriptSegment(start: 2, end: 4,  text: "B")])
+        let chunk0 = (offset: 0.0, segments: [TranscriptSegment(start: 5, end: 10, text: "A")])
+        let chunk1 = (offset: 600.0, segments: [TranscriptSegment(start: 2, end: 4, text: "B")])
         let result = ChunkedTranscriber.mergeChunkResults([chunk0, chunk1])
         XCTAssertEqual(result.count, 2)
         XCTAssertEqual(result[0].text, "A")  // start = 5

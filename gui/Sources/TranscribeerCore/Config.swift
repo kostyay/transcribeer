@@ -11,7 +11,7 @@ public struct AppConfig: Equatable, Sendable {
     public var llmModel: String = "llama3"
     public var ollamaHost: String = "http://localhost:11434"
     public var sessionsDir: String = "~/.transcribeer/sessions"
-    public var captureBin: String = AppConfig.defaultCaptureBin()
+    public var captureBin: String = Self.defaultCaptureBin()
     public var pipelineMode: String = "record+transcribe+summarize"
     public var zoomAutoRecord: Bool = false
     public var promptOnStop: Bool = true
@@ -57,6 +57,7 @@ private struct TOMLFile: Decodable {
 
 private struct PipelineSection: Decodable {
     var mode: String?
+    // swiftlint:disable:next discouraged_optional_boolean
     var zoom_auto_record: Bool?
 }
 
@@ -72,6 +73,7 @@ private struct SummarizationSection: Decodable {
     var backend: String?
     var model: String?
     var ollama_host: String?
+    // swiftlint:disable:next discouraged_optional_boolean
     var prompt_on_stop: Bool?
 }
 
@@ -92,29 +94,36 @@ public enum ConfigManager {
         var cfg = AppConfig()
         guard let data = try? Data(contentsOf: configPath) else { return cfg }
         guard let toml = try? TOMLDecoder().decode(TOMLFile.self, from: data) else { return cfg }
-
-        if let p = toml.pipeline {
-            if let v = p.mode { cfg.pipelineMode = v }
-            if let v = p.zoom_auto_record { cfg.zoomAutoRecord = v }
-        }
-        if let t = toml.transcription {
-            if let v = t.language { cfg.language = v }
-            if let v = t.model { cfg.whisperModel = v }
-            if let v = t.model_repo { cfg.whisperModelRepo = v }
-            if let v = t.diarization { cfg.diarization = v }
-            if let v = t.num_speakers { cfg.numSpeakers = v }
-        }
-        if let s = toml.summarization {
-            if let v = s.backend { cfg.llmBackend = v }
-            if let v = s.model { cfg.llmModel = v }
-            if let v = s.ollama_host { cfg.ollamaHost = v }
-            if let v = s.prompt_on_stop { cfg.promptOnStop = v }
-        }
-        if let p = toml.paths {
-            if let v = p.sessions_dir { cfg.sessionsDir = v }
-            if let v = p.capture_bin { cfg.captureBin = v }
-        }
+        if let p = toml.pipeline { applyPipeline(p, to: &cfg) }
+        if let t = toml.transcription { applyTranscription(t, to: &cfg) }
+        if let s = toml.summarization { applySummarization(s, to: &cfg) }
+        if let p = toml.paths { applyPaths(p, to: &cfg) }
         return cfg
+    }
+
+    private static func applyPipeline(_ section: PipelineSection, to cfg: inout AppConfig) {
+        if let v = section.mode { cfg.pipelineMode = v }
+        if let v = section.zoom_auto_record { cfg.zoomAutoRecord = v }
+    }
+
+    private static func applyTranscription(_ section: TranscriptionSection, to cfg: inout AppConfig) {
+        if let v = section.language { cfg.language = v }
+        if let v = section.model { cfg.whisperModel = v }
+        if let v = section.model_repo { cfg.whisperModelRepo = v }
+        if let v = section.diarization { cfg.diarization = v }
+        if let v = section.num_speakers { cfg.numSpeakers = v }
+    }
+
+    private static func applySummarization(_ section: SummarizationSection, to cfg: inout AppConfig) {
+        if let v = section.backend { cfg.llmBackend = v }
+        if let v = section.model { cfg.llmModel = v }
+        if let v = section.ollama_host { cfg.ollamaHost = v }
+        if let v = section.prompt_on_stop { cfg.promptOnStop = v }
+    }
+
+    private static func applyPaths(_ section: PathsSection, to cfg: inout AppConfig) {
+        if let v = section.sessions_dir { cfg.sessionsDir = v }
+        if let v = section.capture_bin { cfg.captureBin = v }
     }
 
     public static func save(_ cfg: AppConfig) {

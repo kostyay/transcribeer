@@ -11,7 +11,7 @@ public struct Session: Identifiable, Equatable, Sendable {
     public let duration: String
     public let snippet: String
 
-    public static func == (lhs: Session, rhs: Session) -> Bool {
+    public static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.id == rhs.id
     }
 }

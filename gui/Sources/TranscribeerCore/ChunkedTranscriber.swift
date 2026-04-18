@@ -3,7 +3,6 @@ import WhisperKit
 
 /// Transcribes a long audio file by splitting it into chunks processed in parallel.
 public enum ChunkedTranscriber {
-
     /// Audio duration (seconds) above which chunked parallel transcription is used.
     public static let chunkingThreshold: Double = 600 // 10 minutes
 
@@ -67,8 +66,8 @@ public enum ChunkedTranscriber {
         var chunkResults: [(offset: Double, segments: [TranscriptSegment])] = []
 
         // Batches of N — each kit handles exactly one chunk per batch
-        let batches = stride(from: 0, to: chunks.count, by: n).map {
-            Array(chunks[$0..<min($0 + n, chunks.count)])
+        let batches = stride(from: 0, to: chunks.count, by: n).map { start in
+            Array(chunks[start..<min(start + n, chunks.count)])
         }
 
         for batch in batches {
@@ -115,8 +114,8 @@ public enum ChunkedTranscriber {
                     guard !text.isEmpty else { return nil }
                     return TranscriptSegment(
                         start: seg.start + chunk.offset,
-                        end:   seg.end   + chunk.offset,
-                        text:  text
+                        end: seg.end + chunk.offset,
+                        text: text
                     )
                 }
             }
@@ -144,8 +143,8 @@ public enum ChunkedTranscriber {
             result.segments.map { seg in
                 TranscriptSegment(
                     start: Double(seg.start),
-                    end:   Double(seg.end),
-                    text:  seg.text
+                    end: Double(seg.end),
+                    text: seg.text
                 )
             }
         }

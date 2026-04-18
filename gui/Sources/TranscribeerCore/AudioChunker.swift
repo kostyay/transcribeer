@@ -3,7 +3,6 @@ import Foundation
 /// Splits a WAV audio file into fixed-duration chunk files.
 /// Reads actual header fields so it works with any PCM WAV (not just 16kHz/mono/16-bit).
 public enum AudioChunker {
-
     public struct Chunk {
         /// URL of the chunk WAV file on disk.
         public let url: URL
@@ -42,7 +41,7 @@ public enum AudioChunker {
         let frameSize     = Int(numChannels) * Int(bitsPerSample / 8)
         let pcm           = data.subdata(in: 44..<data.count)
 
-        guard frameSize > 0, pcm.count > 0 else { return [] }
+        guard frameSize > 0, !pcm.isEmpty else { return [] }
 
         let samplesPerChunk = Int(Double(sampleRate) * chunkDuration)
         let bytesPerChunk   = samplesPerChunk * frameSize
@@ -120,8 +119,9 @@ private extension Data {
     func readUInt32LE(at offset: Int) -> UInt32 {
         guard offset + 4 <= count else { return 0 }
         return withUnsafeBytes { ptr in
+            guard let base = ptr.baseAddress else { return UInt32(0) }
             var v: UInt32 = 0
-            memcpy(&v, ptr.baseAddress!.advanced(by: offset), 4)
+            memcpy(&v, base.advanced(by: offset), 4)
             return UInt32(littleEndian: v)
         }
     }
@@ -129,19 +129,20 @@ private extension Data {
     func readUInt16LE(at offset: Int) -> UInt16 {
         guard offset + 2 <= count else { return 0 }
         return withUnsafeBytes { ptr in
+            guard let base = ptr.baseAddress else { return UInt16(0) }
             var v: UInt16 = 0
-            memcpy(&v, ptr.baseAddress!.advanced(by: offset), 2)
+            memcpy(&v, base.advanced(by: offset), 2)
             return UInt16(littleEndian: v)
         }
     }
 
     mutating func writeUInt32LE(_ value: UInt32, at offset: Int) {
         var le = value.littleEndian
-        Swift.withUnsafeBytes(of: &le) { replaceSubrange(offset..<(offset+4), with: $0) }
+        Swift.withUnsafeBytes(of: &le) { replaceSubrange(offset..<(offset + 4), with: $0) }
     }
 
     mutating func writeUInt16LE(_ value: UInt16, at offset: Int) {
         var le = value.littleEndian
-        Swift.withUnsafeBytes(of: &le) { replaceSubrange(offset..<(offset+2), with: $0) }
+        Swift.withUnsafeBytes(of: &le) { replaceSubrange(offset..<(offset + 2), with: $0) }
     }
 }

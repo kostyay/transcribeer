@@ -25,16 +25,17 @@ public enum SummarizationService {
     ) async throws -> String {
         let systemPrompt = prompt ?? defaultPrompt
 
-        let provider: LLM.Provider = switch backend {
+        let provider: LLM.Provider
+        switch backend {
         case "openai":
-            .openAI(apiKey: try requireKey("openai", env: "OPENAI_API_KEY"))
+            provider = .openAI(apiKey: try requireKey("openai", env: "OPENAI_API_KEY"))
         case "anthropic":
-            .anthropic(apiKey: try requireKey("anthropic", env: "ANTHROPIC_API_KEY"))
+            provider = .anthropic(apiKey: try requireKey("anthropic", env: "ANTHROPIC_API_KEY"))
         case "ollama":
-            .other(
-                URL(string: "\(ollamaHost)/v1")!,
-                apiKey: nil
-            )
+            guard let url = URL(string: "\(ollamaHost)/v1") else {
+                throw SummarizationError.unknownBackend("Invalid ollama host: \(ollamaHost)")
+            }
+            provider = .other(url, apiKey: nil)
         default:
             throw SummarizationError.unknownBackend(backend)
         }
@@ -76,9 +77,9 @@ public enum SummarizationError: LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .unknownBackend(let name):
+        case let .unknownBackend(name):
             return "Unknown summarization backend: '\(name)'. Use 'openai', 'anthropic', or 'ollama'."
-        case .missingAPIKey(let backend, let envVar):
+        case let .missingAPIKey(backend, envVar):
             return "No \(backend) API key found (Keychain or \(envVar) env var)."
         }
     }

@@ -81,9 +81,7 @@ struct Transcribe: AsyncParsableCommand {
         let text = try await transcribeAndFormat(
             audioURL: audioURL,
             language: language,
-            model: cfg.whisperModel,
             diarization: noDiarize ? "none" : cfg.diarization,
-            numSpeakers: cfg.numSpeakers,
             cfg: cfg
         )
 
@@ -234,7 +232,8 @@ private func runCapture(captureBin: String, audioPath: String, duration: Int?, p
     if let pidFile {
         try String(proc.processIdentifier).write(
             toFile: (pidFile as NSString).expandingTildeInPath,
-            atomically: true, encoding: .utf8
+            atomically: true,
+            encoding: .utf8
         )
     }
 
@@ -255,16 +254,14 @@ private func runCapture(captureBin: String, audioPath: String, duration: Int?, p
 private func transcribeAndFormat(
     audioURL: URL,
     language: String,
-    model: String,
     diarization: String,
-    numSpeakers: Int,
     cfg: AppConfig
 ) async throws -> String {
-    print("  Loading model \(model)…")
+    print("  Loading model \(cfg.whisperModel)…")
     let whisperSegments = try await transcribeAudio(
         audioURL: audioURL,
         language: language,
-        modelName: model,
+        modelName: cfg.whisperModel,
         modelsDir: AppConfig.modelsDir,
         onProgress: { pct in
             let bar = Int(pct * 20)
@@ -283,7 +280,7 @@ private func transcribeAndFormat(
         print("  Diarizing speakers…")
         diarSegments = (try? await DiarizationService.diarize(
             audioURL: audioURL,
-            numSpeakers: numSpeakers > 0 ? numSpeakers : nil
+            numSpeakers: cfg.numSpeakers > 0 ? cfg.numSpeakers : nil
         )) ?? []
     }
 
