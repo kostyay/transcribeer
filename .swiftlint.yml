@@ -140,3 +140,14 @@ large_tuple:
 
 trailing_comma:
   mandatory_comma: true
+
+# Force-unwrap & IUO are errors — flag them explicitly.
+force_cast: error
+force_try: error
+force_unwrapping:
+  severity: error
+implicitly_unwrapped_optional:
+  severity: error
+  mode: all_except_iboutlets
+
+reporter: "xcode"

@@ -13,20 +13,20 @@ struct TranscribeerApp: App {
     @State private var config = ConfigManager.load()
 
     var body: some Scene {
-        MenuBarExtra("Transcribeer", systemImage: runner.state.menuBarIcon) {
+        MenuBarExtra {
             menuContent
                 .onAppear { onFirstAppear() }
                 .onChange(of: zoomWatcher.inMeeting) { _, inMeeting in
                     handleZoomChange(inMeeting: inMeeting)
                 }
+        } label: {
+            MenuBarIcon(state: runner.state)
         }
         .menuBarExtraStyle(.menu)
 
-        Window("Transcribeer Settings", id: "settings") {
+        Settings {
             SettingsView(config: $config)
         }
-        .windowResizability(.contentSize)
-        .defaultSize(width: 460, height: 360)
 
         Window("Recording History", id: "history") {
             HistoryView(config: $config, runner: runner)
@@ -65,9 +65,15 @@ struct TranscribeerApp: App {
             } else {
                 Text("📝 Transcribing…")
             }
+            Button("⏹ Stop") {
+                runner.cancelProcessing()
+            }
 
         case .summarizing:
             Text("🤔 Summarizing…")
+            Button("⏹ Stop") {
+                runner.cancelProcessing()
+            }
 
         case .done(let path):
             Text("✓ Done")
@@ -90,12 +96,11 @@ struct TranscribeerApp: App {
         Divider()
 
         Button("History…") {
-            NSApp.activate()
+            NSApp.activate(ignoringOtherApps: true)
             openWindow(id: "history")
         }
-        Button("Settings…") {
-            NSApp.activate()
-            openWindow(id: "settings")
+        SettingsLink {
+            Text("Settings…")
         }
 
         Divider()
@@ -170,5 +175,4 @@ struct TranscribeerApp: App {
             }
         }
     }
-
 }

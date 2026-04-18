@@ -78,9 +78,7 @@ public class AudioCapture: NSObject {
     private func converterFor(_ srcFormat: AVAudioFormat) -> AVAudioConverter? {
         converterLock.withLock {
             if let c = converter, lastSrcFormat?.isEqual(srcFormat) == true { return c }
-            guard let c = AVAudioConverter(from: srcFormat, to: dstFormat) else {
-                return nil
-            }
+            guard let c = AVAudioConverter(from: srcFormat, to: dstFormat) else { return nil }
             converter = c
             lastSrcFormat = srcFormat
             return c

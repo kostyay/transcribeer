@@ -9,6 +9,7 @@ let package = Package(
         .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "0.18.0"),
         .package(url: "https://github.com/bensyverson/LLM.git", branch: "main"),
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.3.0"),
+        .package(url: "https://github.com/kyle-n/HighlightedTextEditor.git", from: "2.1.0"),
         .package(path: "../capture"),
     ],
     targets: [
@@ -30,6 +31,7 @@ let package = Package(
             dependencies: [
                 "TranscribeerCore",
                 .product(name: "CaptureCore", package: "capture"),
+                .product(name: "HighlightedTextEditor", package: "HighlightedTextEditor"),
             ],
             path: "Sources/TranscribeerApp",
             swiftSettings: [.swiftLanguageMode(.v5)]

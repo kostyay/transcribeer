@@ -8,11 +8,13 @@ import AppKit
 enum DockVisibility {
     private static var windowCount = 0
 
+    /// Call from `.onAppear` of a user-facing window.
     static func windowDidAppear() {
         windowCount += 1
         applyPolicy()
     }
 
+    /// Call from `.onDisappear` of a user-facing window.
     static func windowDidDisappear() {
         windowCount = max(0, windowCount - 1)
         applyPolicy()

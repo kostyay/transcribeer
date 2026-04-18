@@ -18,7 +18,8 @@ Transcribeer captures both sides of any call, transcribes with speaker labels, a
 - **System audio capture** — records both microphone and speaker audio via Apple ScreenCaptureKit
 - **On-device transcription** — [WhisperKit](https://github.com/argmaxinc/WhisperKit) (CoreML, Apple Silicon optimized), Hebrew and multilingual
 - **Speaker diarization** — who said what, via [SpeakerKit](https://github.com/argmaxinc/WhisperKit) (Pyannote, on-device)
-- **LLM summarization** — Ollama (local), OpenAI, or Anthropic
+- **LLM summarization** — Ollama (local), OpenAI, Anthropic, or Gemini (via Google Cloud ADC)
+- **Streaming summaries** — live markdown preview as the LLM generates output
 - **Custom summary profiles** — swap in a different prompt per session without touching config
 - **Native SwiftUI menubar app** — start/stop recording from the menu bar, session browser, settings UI
 - **CLI** — scriptable pipeline (`record`, `transcribe`, `summarize`, `run`)
@@ -31,7 +32,7 @@ Transcribeer captures both sides of any call, transcribes with speaker labels, a
 | Audio capture | [Apple ScreenCaptureKit](https://developer.apple.com/documentation/screencapturekit) (Swift) |
 | Transcription | [WhisperKit](https://github.com/argmaxinc/WhisperKit) (CoreML, on-device) |
 | Diarization | [SpeakerKit](https://github.com/argmaxinc/WhisperKit) (Pyannote, on-device) |
-| Summarization | [Ollama](https://ollama.ai) (local), [OpenAI](https://openai.com), [Anthropic](https://anthropic.com) |
+| Summarization | [Ollama](https://ollama.ai) (local), [OpenAI](https://openai.com), [Anthropic](https://anthropic.com), [Gemini](https://cloud.google.com/vertex-ai) |
 | GUI | Native SwiftUI menubar app |
 | CLI | Swift + [ArgumentParser](https://github.com/apple/swift-argument-parser) |
 | Credentials | macOS Keychain (API keys stored securely per-service) |
@@ -119,7 +120,7 @@ diarization = "pyannote"              # pyannote | none
 num_speakers = 0                      # 0 = auto-detect
 
 [summarization]
-backend = "ollama"                    # ollama | openai | anthropic
+backend = "ollama"                    # ollama | openai | anthropic | gemini
 model = "llama3"
 ollama_host = "http://localhost:11434"
 prompt_on_stop = true
@@ -132,6 +133,8 @@ capture_bin = "~/.transcribeer/bin/capture-bin"
 ### API Keys
 
 API keys for OpenAI and Anthropic are stored in the **macOS Keychain** — never in the config file. Enter them once via **Settings** in the menubar app; they are saved securely and retrieved automatically.
+
+Gemini uses Google Cloud Application Default Credentials (ADC). Run `gcloud auth application-default login` and select your project — the app reads credentials automatically.
 
 ## Summary Profiles
 
@@ -148,6 +151,8 @@ EOF
 ```
 
 Use with `--profile standup` in the CLI, or select in the menubar app's Profile menu.
+
+- **Menubar**: click **Profile** in the menu during or after a recording and type the profile name
 
 ## Obsidian Plugin
 
@@ -173,6 +178,7 @@ make build-dev      # assemble .app bundle
 make gui            # build + launch
 make dev            # full dev install (capture + GUI + launch agent)
 make obsidian-plugin OBSIDIAN_VAULT=~/path/to/vault
+make e2e-hebrew     # run Hebrew loopback e2e test (requires ANTHROPIC_API_KEY)
 ```
 
 ## Recording Consent

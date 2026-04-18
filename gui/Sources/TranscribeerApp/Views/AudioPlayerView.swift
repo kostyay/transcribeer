@@ -95,7 +95,9 @@ final class AudioPlayerVM {
 
 struct AudioPlayerView: View {
     let audioURL: URL
-    @State private var vm = AudioPlayerVM()
+    /// Shared player instance. Owned by the parent so siblings (e.g. the
+    /// transcript view's clickable timestamps) can drive playback too.
+    let vm: AudioPlayerVM
     @State private var isSeeking = false
 
     private static let speeds: [Float] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
@@ -129,6 +131,8 @@ struct AudioPlayerView: View {
                 )
             }
             .frame(height: 6)
+            .accessibilityLabel("Playback position")
+            .accessibilityValue("\(formatTime(vm.currentTime)) of \(formatTime(vm.duration))")
 
             // Controls row
             HStack(spacing: 8) {
@@ -141,15 +145,14 @@ struct AudioPlayerView: View {
 
                 Spacer()
 
-                // Skip back 10s
                 Button { vm.skip(-10) } label: {
                     Image(systemName: "gobackward.10")
                         .font(.system(size: 13))
                 }
                 .buttonStyle(.plain)
                 .disabled(!vm.hasAudio)
+                .accessibilityLabel("Skip back 10 seconds")
 
-                // Play/Pause
                 Button { vm.togglePlay() } label: {
                     Image(systemName: vm.isPlaying ? "pause.fill" : "play.fill")
                         .font(.system(size: 15))
@@ -158,14 +161,15 @@ struct AudioPlayerView: View {
                 .buttonStyle(.plain)
                 .disabled(!vm.hasAudio)
                 .keyboardShortcut(.space, modifiers: [])
+                .accessibilityLabel(vm.isPlaying ? "Pause" : "Play")
 
-                // Skip forward 30s
                 Button { vm.skip(30) } label: {
                     Image(systemName: "goforward.30")
                         .font(.system(size: 13))
                 }
                 .buttonStyle(.plain)
                 .disabled(!vm.hasAudio)
+                .accessibilityLabel("Skip forward 30 seconds")
 
                 Spacer()
 
@@ -214,7 +218,7 @@ struct AudioPlayerView: View {
     }
 
     private func speedLabel(_ speed: Float) -> String {
-        speed == 1.0 ? "1×" : String(format: "%g×", speed)
+        speed == 1.0 ? "1x" : String(format: "%gx", speed)
     }
 
     private func formatTime(_ t: TimeInterval) -> String {

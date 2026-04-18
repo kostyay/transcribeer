@@ -23,6 +23,6 @@ let package = Package(
             name: "captureCoreTests",
             dependencies: ["CaptureCore"],
             path: "Tests/captureCoreTests"
-        )
+        ),
     ]
 )
