@@ -41,17 +41,32 @@ final class TranscriptionService {
             .appendingPathComponent(name)
         let alreadyDownloaded = FileManager.default.fileExists(atPath: localModelDir.path)
 
-        var config = WhisperKitConfig(
-            model: name,
-            downloadBase: downloadBase,
-            verbose: false,
-            logLevel: .none,
-            prewarm: true,
-            load: true,
-            download: !alreadyDownloaded
-        )
-        if !repo.isEmpty {
-            config.modelRepo = repo
+        var config: WhisperKitConfig
+        if alreadyDownloaded {
+            // Point directly at the cached folder — no network needed
+            config = WhisperKitConfig(
+                model: name,
+                downloadBase: downloadBase,
+                modelFolder: localModelDir.path,
+                verbose: false,
+                logLevel: .none,
+                prewarm: true,
+                load: true,
+                download: false
+            )
+        } else {
+            config = WhisperKitConfig(
+                model: name,
+                downloadBase: downloadBase,
+                verbose: false,
+                logLevel: .none,
+                prewarm: true,
+                load: true,
+                download: true
+            )
+            if !repo.isEmpty {
+                config.modelRepo = repo
+            }
         }
         kitConfig = config
 
