@@ -14,6 +14,13 @@ struct HistoryView: View {
     @State private var profiles: [String] = ["default"]
     @State private var statusText = ""
 
+    /// SwiftUI's canonical way to open the app's Settings scene (macOS 14+).
+    /// The older NSApp.sendAction("showSettingsWindow:") path is flaky in
+    /// menu-bar-extra-only apps because there's no first responder to route
+    /// the selector through; this environment action talks to the Settings
+    /// scene directly.
+    @Environment(\.openSettings) private var openSettingsEnv
+
     var body: some View {
         VStack(spacing: 0) {
             controlBar
@@ -52,6 +59,7 @@ struct HistoryView: View {
             stateIndicator
             Spacer()
             importButton
+            settingsButton
             primaryActionButton
         }
         .padding(.horizontal, 16)
@@ -74,6 +82,24 @@ struct HistoryView: View {
         .controlSize(.large)
         .help("Import audio file…")
         .keyboardShortcut("i", modifiers: .command)
+    }
+
+    /// Gear icon next to the primary action — opens the Settings scene. Gives
+    /// users a discoverable in-window entry point instead of relying on the
+    /// macOS App menu or ⌘, (which aren't obvious if the menu bar extras are
+    /// hidden behind the notch).
+    private var settingsButton: some View {
+        Button {
+            NSApp.activate(ignoringOtherApps: true)
+            openSettingsEnv()
+        } label: {
+            Image(systemName: "gearshape")
+                .font(.system(size: 16))
+        }
+        .buttonStyle(.borderless)
+        .controlSize(.large)
+        .help("Settings (⌘,)")
+        .keyboardShortcut(",", modifiers: .command)
     }
 
     // MARK: - Import
