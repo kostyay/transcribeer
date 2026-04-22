@@ -13,6 +13,10 @@ struct HistoryView: View {
     @State private var searchText = ""
     @State private var profiles: [String] = ["default"]
     @State private var statusText = ""
+    /// Session queued for confirmation after a sidebar right-click > Delete.
+    /// Also drives the confirmation dialog so the user never deletes in a
+    /// single click.
+    @State private var sessionPendingDeletion: Session?
 
     /// SwiftUI's canonical way to open the app's Settings scene (macOS 14+).
     /// The older NSApp.sendAction("showSettingsWindow:") path is flaky in
@@ -22,12 +26,12 @@ struct HistoryView: View {
     @Environment(\.openSettings) private var openSettingsEnv
 
     var body: some View {
-        VStack(spacing: 0) {
-            controlBar
-            Divider()
-            NavigationSplitView {
-                sidebar
-            } detail: {
+        NavigationSplitView {
+            sidebar
+        } detail: {
+            VStack(spacing: 0) {
+                controlBar
+                Divider()
                 detailPanel
             }
         }
@@ -297,14 +301,46 @@ struct HistoryView: View {
     // MARK: - Sidebar
 
     private var sidebar: some View {
-        List(filteredSessions, selection: $selectedSessionID) { session in
-            SessionRow(session: session)
+        List(selection: $selectedSessionID) {
+            ForEach(groupedSessions, id: \.title) { group in
+                Section(group.title) {
+                    ForEach(group.sessions) { session in
+                        SessionRow(session: session)
+                            .tag(session.id)
+                            .contextMenu {
+                                Button("Reveal in Finder") {
+                                    NSWorkspace.shared.open(session.path)
+                                }
+                                Divider()
+                                Button("Delete…", role: .destructive) {
+                                    sessionPendingDeletion = session
+                                }
+                            }
+                    }
+                }
+            }
         }
         .searchable(text: $searchText, prompt: "Search sessions…")
         .navigationTitle("Transcribeer")
         .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 380)
         .onChange(of: selectedSessionID) { _, newID in
             loadDetail(sessionID: newID)
+        }
+        .confirmationDialog(
+            sessionPendingDeletion.map { "Delete \"\($0.name)\"?" } ?? "Delete session?",
+            isPresented: Binding(
+                get: { sessionPendingDeletion != nil },
+                set: { if !$0 { sessionPendingDeletion = nil } },
+            ),
+            titleVisibility: .visible,
+            presenting: sessionPendingDeletion,
+        ) { session in
+            Button("Move to Trash", role: .destructive) {
+                deleteSession(session)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("The recording, transcript, and summary will be moved to the Trash.")
         }
     }
 
@@ -384,6 +420,14 @@ struct HistoryView: View {
         return sessions.filter { $0.name.lowercased().contains(query) }
     }
 
+    /// Sessions bucketed into Apple Notes–style date groups (Today,
+    /// Yesterday, Previous 7 Days, Previous 30 Days, then by year). Empty
+    /// buckets are omitted so the sidebar doesn't show hollow section
+    /// headers.
+    private var groupedSessions: [SessionGroup] {
+        SessionGrouper.group(filteredSessions, now: Date())
+    }
+
     private var selectedSession: Session? {
         sessions.first { $0.id == selectedSessionID }
     }
@@ -434,11 +478,7 @@ private struct SessionRow: View {
             }
 
             HStack(spacing: 4) {
-                Text(session.formattedDate)
-                if !session.duration.isEmpty && session.duration != "—" {
-                    Text("·")
-                    Text(session.duration)
-                }
+                Text(SessionDateFormatter.sidebarLine(for: session))
                 if let badge = languageBadge {
                     Text(badge)
                         .font(.system(size: 9, weight: .medium))

@@ -18,6 +18,14 @@ struct Session: Identifiable, Equatable {
     let hasAudio: Bool
     let hasTranscript: Bool
     let hasSummary: Bool
+    /// Wall-clock time the user started recording (written by PipelineRunner
+    /// when live-recording). `nil` for imported sessions and pre-existing
+    /// sessions recorded before this field was tracked.
+    let startedAt: Date?
+    /// Wall-clock time the recording finished successfully. `nil` in the
+    /// same cases as `startedAt` and also while a recording is still in
+    /// progress.
+    let endedAt: Date?
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.id == rhs.id
@@ -101,6 +109,8 @@ enum SessionManager {
             hasAudio: audioURL(in: dir) != nil,
             hasTranscript: hasTranscript,
             hasSummary: hasSummary,
+            startedAt: parseDate(meta["startedAt"]),
+            endedAt: parseDate(meta["endedAt"]),
         )
     }
 
@@ -154,6 +164,26 @@ enum SessionManager {
         writeMeta(dir, data)
     }
 
+    /// Persist wall-clock recording window for a session. Called by
+    /// PipelineRunner at record start (`endedAt` nil) and again when the
+    /// capture finishes successfully. Written as ISO-8601 so it's both
+    /// human-readable and unambiguous across time zones.
+    static func setRecordingTimes(_ dir: URL, startedAt: Date?, endedAt: Date?) {
+        var data = readMeta(dir)
+        let fmt = isoFormatter
+        if let startedAt {
+            data["startedAt"] = fmt.string(from: startedAt)
+        } else {
+            data.removeValue(forKey: "startedAt")
+        }
+        if let endedAt {
+            data["endedAt"] = fmt.string(from: endedAt)
+        } else {
+            data.removeValue(forKey: "endedAt")
+        }
+        writeMeta(dir, data)
+    }
+
     static func setLanguage(_ dir: URL, _ language: String?) {
         var data = readMeta(dir)
         if let language, !language.isEmpty {
@@ -184,6 +214,24 @@ enum SessionManager {
         fmt.dateFormat = "MMM d, yyyy HH:mm"
         return fmt
     }()
+
+    /// ISO-8601 with fractional seconds — matches what Foundation's
+    /// `ISO8601DateFormatter` produces by default and round-trips cleanly.
+    private static let isoFormatter: ISO8601DateFormatter = {
+        let fmt = ISO8601DateFormatter()
+        fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fmt
+    }()
+
+    /// Accept ISO-8601 strings either with or without fractional seconds so
+    /// manually-edited meta.json entries still parse.
+    private static func parseDate(_ raw: Any?) -> Date? {
+        guard let string = raw as? String, !string.isEmpty else { return nil }
+        if let date = isoFormatter.date(from: string) { return date }
+        let fallback = ISO8601DateFormatter()
+        fallback.formatOptions = [.withInternetDateTime]
+        return fallback.date(from: string)
+    }
 
     private static func creationDate(of dir: URL) -> Date {
         (try? dir.resourceValues(forKeys: [.creationDateKey]))?.creationDate ?? .distantPast

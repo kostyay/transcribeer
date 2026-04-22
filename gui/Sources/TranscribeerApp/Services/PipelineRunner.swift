@@ -53,6 +53,11 @@ final class PipelineRunner {
     /// Transcription progress (0..1), driven by WhisperKit.
     var transcriptionProgress: Double? { transcriptionService.progress }
 
+    /// True between a user clicking Stop and the pipeline actually tearing
+    /// down. Drives a "Cancelling…" UI state so the button feels responsive
+    /// even while WhisperKit finishes a non-cancellable CoreML load.
+    var isCancelling: Bool = false
+
     let transcriptionService = TranscriptionService()
 
     private var pipelineTask: Task<Void, Never>?
@@ -65,10 +70,15 @@ final class PipelineRunner {
         let session = SessionManager.newSession(sessionsDir: config.expandedSessionsDir)
         currentSession = session
         promptProfile = nil
-        state = .recording(startTime: Date())
+        isCancelling = false
+        let startTime = Date()
+        // Persist start time immediately so it’s visible in the sidebar
+        // while the recording is still in progress.
+        SessionManager.setRecordingTimes(session, startedAt: startTime, endedAt: nil)
+        state = .recording(startTime: startTime)
 
         pipelineTask = Task {
-            await runPipeline(session: session, config: config)
+            await runPipeline(session: session, startedAt: startTime, config: config)
         }
     }
 
@@ -79,9 +89,17 @@ final class PipelineRunner {
 
     /// Cancel an in-flight transcription or summarization. Does nothing while
     /// recording (use `stopRecording` for that).
+    ///
+    /// Cancellation is cooperative: `pipelineTask.cancel()` propagates through
+    /// the structured task tree, and WhisperKit / HubApi check
+    /// `Task.isCancelled` at various checkpoints. The CoreML model compile +
+    /// prewarm step has no cancellation hook, so during that phase the pipeline
+    /// keeps running until it reaches the next checkpoint — we set
+    /// `isCancelling` immediately so the UI can reflect that a stop is pending.
     func cancelProcessing() {
         switch state {
         case .transcribing, .summarizing:
+            isCancelling = true
             transcriptionService.cancel()
             processingTask?.cancel()
             pipelineTask?.cancel()
@@ -92,7 +110,7 @@ final class PipelineRunner {
         }
     }
 
-    private func runPipeline(session: URL, config: AppConfig) async {
+    private func runPipeline(session: URL, startedAt: Date, config: AppConfig) async {
         let audioPath = session.appendingPathComponent("audio.m4a")
         let transcriptPath = session.appendingPathComponent("transcript.txt")
         let summaryPath = session.appendingPathComponent("summary.md")
@@ -125,6 +143,9 @@ final class PipelineRunner {
                 atPath: audioPath.path
             )[.size] as? UInt64) ?? 0
             logger.log("recorded \(size) bytes")
+            // Stamp the wall-clock end of the capture so the sidebar can
+            // show a "10:30 – 11:15" range for calendar correlation.
+            SessionManager.setRecordingTimes(session, startedAt: startedAt, endedAt: Date())
         }
 
         if config.pipelineMode == "record-only" {
@@ -182,6 +203,7 @@ final class PipelineRunner {
             return true
         } catch is CancellationError {
             logger.log("transcription cancelled")
+            isCancelling = false
             state = .idle
             return false
         } catch {
@@ -282,6 +304,11 @@ final class PipelineRunner {
         // expensive compile/prewarm steps WhisperKit performs internally.
         try await transcriptionService.loadModel(name: model, repo: modelRepo.isEmpty ? nil : modelRepo)
 
+        // WhisperKit's CoreML compile/prewarm step isn't cancellation-aware,
+        // so a Stop click during loading only takes effect once we get here.
+        // Bail out cleanly before kicking off transcription + diarization.
+        try Task.checkCancellation()
+
         // Transcription and diarization are independent: both consume the
         // same audio file and produce disjoint segment streams. Run them in
         // parallel so the pipeline's wall time is dominated by the slower of
@@ -340,8 +367,10 @@ final class PipelineRunner {
         let previousState = state
         state = .transcribing
         transcribingSession = session
+        isCancelling = false
         defer {
             transcribingSession = nil
+            isCancelling = false
             if case .transcribing = state { state = previousState }
         }
 
@@ -399,6 +428,7 @@ final class PipelineRunner {
 
         let previousState = state
         state = .summarizing
+        isCancelling = false
 
         // Run inside a stored Task so `cancelProcessing` can tear it down
         // mid-stream — the caller's Task isn't reachable from the runner.
@@ -425,6 +455,7 @@ final class PipelineRunner {
         summarizeTask = work
         let result = await work.value
         summarizeTask = nil
+        isCancelling = false
         if case .summarizing = state { state = previousState }
 
         if !result.ok, result.error == "Cancelled" {

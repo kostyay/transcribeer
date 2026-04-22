@@ -57,8 +57,9 @@ struct TranscriptionProgressRow: View {
         }
         .buttonStyle(.borderless)
         .controlSize(.small)
-        .help("Stop transcription")
-        .accessibilityLabel("Stop transcription")
+        .disabled(runner.isCancelling)
+        .help(runner.isCancelling ? "Cancelling…" : "Stop transcription")
+        .accessibilityLabel(runner.isCancelling ? "Cancelling" : "Stop transcription")
     }
 
     /// `01:23` while warming up, `01:23 · ~00:45 left` once ETA is stable.
@@ -78,6 +79,7 @@ struct TranscriptionProgressRow: View {
     }
 
     private var progressLabel: String {
+        if runner.isCancelling { return "Cancelling…" }
         if runner.transcriptionProgress != nil { return "Transcribing…" }
         return switch runner.transcriptionService.modelState {
         case .downloading: "Downloading model…"

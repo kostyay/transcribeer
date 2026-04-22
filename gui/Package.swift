@@ -52,5 +52,11 @@ let package = Package(
             path: "Tests/TranscribeerCoreTests",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
+        .testTarget(
+            name: "TranscribeerTests",
+            dependencies: ["TranscribeerApp"],
+            path: "Tests/TranscribeerTests",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
     ]
 )
