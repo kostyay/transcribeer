@@ -1,3 +1,4 @@
+import TranscribeerCore
 import AVFoundation
 import SwiftUI
 
@@ -217,7 +218,7 @@ struct AudioPlayerView: View {
     }
 
     private func speedLabel(_ speed: Float) -> String {
-        speed == 1.0 ? "1×" : String(format: "%g×", speed)
+        speed == 1.0 ? "1x" : String(format: "%gx", speed)
     }
 
     private func formatTime(_ t: TimeInterval) -> String {

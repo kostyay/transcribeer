@@ -66,7 +66,11 @@ public class AudioCapture: NSObject {
         stopAccepting()
         let s = stream
         stream = nil
-        Task { try? await s?.stopCapture() }
+        let callback = onStreamStopped
+        Task {
+            try? await s?.stopCapture()
+            callback?()
+        }
     }
 
     // MARK: - Private helpers

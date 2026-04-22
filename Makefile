@@ -23,10 +23,11 @@ APP_CONTENTS = $(APP_BUNDLE)/Contents
 APP_MACOS    = $(APP_CONTENTS)/MacOS
 APP_RESOURCES = $(APP_CONTENTS)/Resources
 
-OBSIDIAN_VAULT = $(HOME)/Library/Mobile Documents/com~apple~CloudDocs/kostyay
+# Override with: make obsidian-plugin OBSIDIAN_VAULT=/path/to/your/vault
+OBSIDIAN_VAULT ?= $(HOME)/Library/Mobile Documents/com~apple~CloudDocs/$(shell id -un)
 OBSIDIAN_PLUGIN_DIR = $(OBSIDIAN_VAULT)/.obsidian/plugins/transcribeer
 
-.PHONY: gui gui-build build-dev capture test-capture logs help dev dev-uninstall dev-restart obsidian-plugin lint lint-fix lint-strict e2e e2e-hebrew reset-mac-permissions sign check-identity setup-dev-cert
+.PHONY: gui gui-build build-dev capture test-capture logs help dev dev-uninstall dev-restart obsidian-plugin lint lint-fix lint-strict clean e2e e2e-hebrew reset-mac-permissions sign check-identity setup-dev-cert
 
 help:
 	@echo "dev targets:"
@@ -49,7 +50,7 @@ help:
 	@echo "  make lint-strict    run swiftlint with --strict (warnings fail)"
 	@echo "  make e2e-hebrew     run the Hebrew loopback e2e test (needs capture-bin + ANTHROPIC_API_KEY)"
 
-# ── lint ───────────────────────────────────────────────────────────────────────────────
+# ── lint ──────────────────────────────────────────────────────────────────────
 lint:
 	@command -v swiftlint >/dev/null || { echo "swiftlint not installed. Run: brew install swiftlint"; exit 1; }
 	swiftlint lint --config $(PROJECT_DIR)/.swiftlint.yml
@@ -61,6 +62,11 @@ lint-fix:
 lint-strict:
 	@command -v swiftlint >/dev/null || { echo "swiftlint not installed. Run: brew install swiftlint"; exit 1; }
 	swiftlint lint --strict --config $(PROJECT_DIR)/.swiftlint.yml
+
+# ── clean ─────────────────────────────────────────────────────────────────────
+clean:
+	rm -rf gui/.build capture/.build
+	@echo "✓ build caches cleared"
 
 # ── dev install + launch agent ────────────────────────────────────────────────
 define PLIST_CONTENT
@@ -179,17 +185,16 @@ sign: check-identity
 	@[ -d $(APP_BUNDLE) ] && codesign -dv $(APP_BUNDLE) 2>&1 | grep -E 'Authority|Signature|Identifier' | sed 's/^/    app-bundle:  /' || true
 
 dev: setup-dev-cert capture build-dev
+dev: setup-dev-cert capture build-dev
 	@mkdir -p $(LOG_DIR)
-	@launchctl bootout gui/$$(id -u)/$(PLIST_LABEL) 2>/dev/null || true
-	@# Wait for the previous instance to fully tear down; bootstrap errors with
-	@# EIO (5) if the service is still in the process of stopping.
-	@for i in 1 2 3 4 5 6 7 8 9 10; do \
-		if ! launchctl print gui/$$(id -u)/$(PLIST_LABEL) >/dev/null 2>&1; then break; fi; \
-		sleep 0.5; \
-	done
-	@echo "$$PLIST_CONTENT" > $(PLIST_PATH)
-	launchctl bootstrap gui/$$(id -u) $(PLIST_PATH)
-	@echo "✓ transcribeer dev agent installed and running"
+	@if launchctl list $(PLIST_LABEL) >/dev/null 2>&1; then \
+		launchctl kickstart -k gui/$$(id -u)/$(PLIST_LABEL); \
+		echo "✓ transcribeer restarted (TCC preserved)"; \
+	else \
+		echo "$$PLIST_CONTENT" > $(PLIST_PATH); \
+		launchctl bootstrap gui/$$(id -u) $(PLIST_PATH); \
+		echo "✓ transcribeer dev agent installed and running"; \
+	fi
 	@echo "  logs: $(LOG_DIR)/transcribeer.log"
 
 dev-uninstall:
@@ -208,8 +213,12 @@ gui-build:
 
 build-dev: gui-build
 	@mkdir -p $(APP_MACOS) $(APP_RESOURCES)
-	cp gui/.build/release/TranscribeerApp $(APP_MACOS)/TranscribeerApp
-	cp gui/Info.plist $(APP_CONTENTS)/Info.plist
+	@cmp -s gui/.build/release/TranscribeerApp $(APP_MACOS)/TranscribeerApp || \
+		cp gui/.build/release/TranscribeerApp $(APP_MACOS)/TranscribeerApp
+	@cmp -s $(BIN_DIR)/capture-bin $(APP_MACOS)/capture-bin 2>/dev/null || \
+		cp $(BIN_DIR)/capture-bin $(APP_MACOS)/capture-bin 2>/dev/null || true
+	@cmp -s gui/Info.plist $(APP_CONTENTS)/Info.plist || \
+		cp gui/Info.plist $(APP_CONTENTS)/Info.plist
 	@if [ -f assets/logo.png ]; then \
 		iconset_root="$$(mktemp -d /tmp/transcribeer-iconset.XXXXXX)"; \
 		iconset_dir="$$iconset_root/AppIcon.iconset"; \
@@ -292,11 +301,12 @@ logs:
 
 # ── Obsidian plugin ───────────────────────────────────────────────────────────
 obsidian-plugin:
-	cd obsidian-plugin && npm run build
+	cd obsidian-plugin && npm install --silent && npm run build
 	mkdir -p "$(OBSIDIAN_PLUGIN_DIR)"
 	cp obsidian-plugin/main.js "$(OBSIDIAN_PLUGIN_DIR)/"
 	cp obsidian-plugin/manifest.json "$(OBSIDIAN_PLUGIN_DIR)/"
-	@echo "✓ Obsidian plugin installed — reload Obsidian to pick up changes"
+	@echo "✓ Obsidian plugin installed → $(OBSIDIAN_PLUGIN_DIR)"
+	@echo "  Reload Obsidian and enable the plugin in Settings → Community plugins"
 
 .PHONY: release
 release: ## Tag a release and update the Homebrew formula SHA

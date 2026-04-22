@@ -1,3 +1,4 @@
+import TranscribeerCore
 import Foundation
 
 /// Single source of truth for the app's pipeline state.
@@ -16,19 +17,29 @@ enum AppState: Equatable {
 
     var isBusy: Bool {
         switch self {
-        case .recording, .transcribing, .summarizing: true
-        default: false
+        case .recording, .transcribing, .summarizing: return true
+        default: return false
+        }
+    }
+
+    var menuBarIcon: String {
+        switch self {
+        case .idle: return "mic"
+        case .recording: return "record.circle.fill"
+        case .transcribing, .summarizing: return "ellipsis.circle"
+        case .done: return "checkmark.circle"
+        case .error: return "exclamationmark.triangle"
         }
     }
 
     var statusText: String {
         switch self {
-        case .idle: ""
-        case .recording(let start): Self.recordingText(from: start)
-        case .transcribing: "📝 Transcribing…"
-        case .summarizing: "🤔 Summarizing…"
-        case .done: "✓ Done"
-        case .error(let msg): "⚠ \(msg)"
+        case .idle: return ""
+        case .recording(let start): return Self.recordingText(from: start)
+        case .transcribing: return "📝 Transcribing…"
+        case .summarizing: return "🤔 Summarizing…"
+        case .done: return "✓ Done"
+        case .error(let msg): return "⚠ \(msg)"
         }
     }
 

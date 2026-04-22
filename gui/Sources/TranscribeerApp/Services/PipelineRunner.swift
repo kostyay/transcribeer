@@ -1,5 +1,6 @@
 import Foundation
 import os.log
+import TranscribeerCore
 
 private let logger = Logger(subsystem: "com.transcribeer", category: "pipeline")
 
@@ -54,7 +55,6 @@ final class PipelineRunner {
 
     let transcriptionService = TranscriptionService()
 
-    private var captureProcess: Process?
     private var pipelineTask: Task<Void, Never>?
     private var processingTask: Task<Void, Never>?
     private var summarizeTask: Task<CLIResult, Never>?
@@ -74,9 +74,7 @@ final class PipelineRunner {
 
     func stopRecording() {
         guard state.isRecording else { return }
-        if let captureProcess, captureProcess.isRunning {
-            captureProcess.interrupt()  // SIGINT
-        }
+        CaptureService.stop()
     }
 
     /// Cancel an in-flight transcription or summarization. Does nothing while
@@ -103,10 +101,30 @@ final class PipelineRunner {
         logger.log("session=\(session.path)")
         logger.log("pipeline=\(config.pipelineMode) lang=\(config.language) diarize=\(config.diarization)")
 
-        // 1. Record — use capture-bin directly
-        logger.log("capture-bin=\(config.expandedCaptureBin)")
-        guard await performRecording(config: config, audioPath: audioPath, logger: logger) else {
+        // 1. Record — in-process via CaptureCore (uses app's TCC permission)
+        logger.log("capture started")
+        let recordResult = await CaptureService.record(to: audioPath, duration: nil)
+
+        switch recordResult {
+        case .permissionDenied:
+            let err = "Grant Screen Recording in System Settings → Privacy"
+            logger.log(err)
+            state = .error(err)
             return
+        case .error(let err):
+            logger.log("capture failed: \(err)")
+            state = .error(err)
+            NotificationManager.notifyError(err)
+            return
+        case .noAudio:
+            logger.log("no audio captured")
+            state = .idle
+            return
+        case .recorded:
+            let size = (try? FileManager.default.attributesOfItem(
+                atPath: audioPath.path
+            )[.size] as? UInt64) ?? 0
+            logger.log("recorded \(size) bytes")
         }
 
         if config.pipelineMode == "record-only" {
@@ -138,52 +156,25 @@ final class PipelineRunner {
         finishSession(session)
     }
 
-    private func performRecording(
-        config: AppConfig,
-        audioPath: URL,
-        logger: SessionLogger
-    ) async -> Bool {
-        let result = await runCapture(
-            captureBin: config.expandedCaptureBin,
-            audioPath: audioPath
-        )
-
-        switch result {
-        case let .error(err):
-            logger.log("capture failed: \(err)")
-            state = .error(err)
-            NotificationManager.notifyError(err)
-            return false
-        case .noAudio:
-            logger.log("no audio captured")
-            state = .idle
-            return false
-        case .recorded:
-            let size = (try? FileManager.default.attributesOfItem(
-                atPath: audioPath.path,
-            )[.size] as? Int) ?? 0
-            logger.log("recorded \(size) bytes")
-            return true
-        }
-    }
-
     private func performTranscription(
         config: AppConfig,
         audioPath: URL,
         transcriptPath: URL,
-        logger: SessionLogger,
+        logger: SessionLogger
     ) async -> Bool {
         state = .transcribing
         transcribingSession = transcriptPath.deletingLastPathComponent()
         defer { transcribingSession = nil }
         logger.log("transcription started")
+
         do {
             let result = try await transcribeAndFormat(
                 audioPath: audioPath,
                 language: config.language,
                 model: config.whisperModel,
+                modelRepo: config.whisperModelRepo,
                 diarization: config.diarization,
-                numSpeakers: config.numSpeakers,
+                numSpeakers: config.numSpeakers
             )
             try result.write(to: transcriptPath, atomically: true, encoding: .utf8)
             SessionManager.setLanguage(transcriptPath.deletingLastPathComponent(), config.language)
@@ -218,7 +209,7 @@ final class PipelineRunner {
                 transcript: transcript,
                 summaryPath: summaryPath,
                 config: config,
-                prompt: customPrompt,
+                prompt: customPrompt
             )
             logger.log("summarization done")
         } catch {
@@ -236,7 +227,7 @@ final class PipelineRunner {
         transcript: String,
         summaryPath: URL,
         config: AppConfig,
-        prompt: String?,
+        prompt: String?
     ) async throws -> String {
         summarizingSession = session
         liveSummary = ""
@@ -251,7 +242,7 @@ final class PipelineRunner {
             backend: config.llmBackend,
             model: config.llmModel,
             ollamaHost: config.ollamaHost,
-            prompt: prompt,
+            prompt: prompt
         )
 
         var accumulated = ""
@@ -271,17 +262,19 @@ final class PipelineRunner {
 
     // MARK: - Transcription + Diarization + Formatting
 
+    // swiftlint:disable:next function_parameter_count
     private func transcribeAndFormat(
         audioPath: URL,
         language: String,
         model: String,
+        modelRepo: String,
         diarization: String,
-        numSpeakers: Int,
+        numSpeakers: Int
     ) async throws -> String {
         // Ensure the configured model is loaded. Runs on the service's
         // MainActor but quickly hands off to a background task for the
         // expensive compile/prewarm steps WhisperKit performs internally.
-        try await transcriptionService.loadModel(name: model)
+        try await transcriptionService.loadModel(name: model, repo: modelRepo.isEmpty ? nil : modelRepo)
 
         // Transcription and diarization are independent: both consume the
         // same audio file and produce disjoint segment streams. Run them in
@@ -289,14 +282,14 @@ final class PipelineRunner {
         // the two instead of their sum.
         async let whisperSegmentsTask = transcriptionService.transcribe(
             audioURL: audioPath,
-            language: language,
+            language: language
         )
 
         async let diarSegmentsTask: [DiarSegment] = {
             guard diarization != "none" else { return [] }
             return try await DiarizationService.diarize(
                 audioURL: audioPath,
-                numSpeakers: numSpeakers > 0 ? numSpeakers : nil,
+                numSpeakers: numSpeakers > 0 ? numSpeakers : nil
             )
         }()
 
@@ -307,72 +300,9 @@ final class PipelineRunner {
 
         let labeled = TranscriptFormatter.assignSpeakers(
             whisperSegments: whisperSegments,
-            diarSegments: diarSegments,
+            diarSegments: diarSegments
         )
         return TranscriptFormatter.format(labeled)
-    }
-
-    // MARK: - Capture
-
-    private enum CaptureResult {
-        case recorded
-        case noAudio
-        case error(String)
-    }
-
-    private func runCapture(captureBin: String, audioPath: URL) async -> CaptureResult {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                let proc = Process()
-                proc.executableURL = URL(fileURLWithPath: captureBin)
-                proc.arguments = [audioPath.path]
-                let errPipe = Pipe()
-                proc.standardOutput = FileHandle.nullDevice
-                proc.standardError = errPipe
-
-                do {
-                    try proc.run()
-                } catch {
-                    continuation.resume(returning: .error(
-                        "Failed to launch capture-bin: \(error.localizedDescription)"
-                    ))
-                    return
-                }
-
-                Task { @MainActor in
-                    self?.captureProcess = proc
-                }
-
-                proc.waitUntilExit()
-
-                Task { @MainActor in
-                    self?.captureProcess = nil
-                }
-
-                let stderr = String(
-                    data: errPipe.fileHandleForReading.readDataToEndOfFile(),
-                    encoding: .utf8
-                ) ?? ""
-
-                if proc.terminationStatus != 0 {
-                    if stderr.contains("Screen & System Audio Recording") {
-                        continuation.resume(returning: .error(
-                            "Grant Screen Recording in System Settings → Privacy"
-                        ))
-                    } else {
-                        continuation.resume(returning: .error(
-                            "capture-bin exited \(proc.terminationStatus)"
-                        ))
-                    }
-                    return
-                }
-
-                let size = (try? FileManager.default.attributesOfItem(
-                    atPath: audioPath.path
-                )[.size] as? UInt64) ?? 0
-                continuation.resume(returning: size > 0 ? .recorded : .noAudio)
-            }
-        }
     }
 
     // MARK: - History re-runs
@@ -391,7 +321,7 @@ final class PipelineRunner {
     func transcribeSession(
         _ session: URL,
         config: AppConfig,
-        languageOverride: String? = nil,
+        languageOverride: String? = nil
     ) async -> CLIResult {
         guard let audioPath = SessionManager.audioURL(in: session) else {
             return CLIResult(ok: false, error: "Audio file not found")
@@ -414,8 +344,9 @@ final class PipelineRunner {
                 audioPath: audioPath,
                 language: language,
                 model: config.whisperModel,
+                modelRepo: config.whisperModelRepo,
                 diarization: config.diarization,
-                numSpeakers: config.numSpeakers,
+                numSpeakers: config.numSpeakers
             )
             try result.write(to: txPath, atomically: true, encoding: .utf8)
             SessionManager.setLanguage(session, language)
@@ -446,7 +377,7 @@ final class PipelineRunner {
         _ session: URL,
         config: AppConfig,
         profile: String?,
-        overrides: SummarizeOverrides = .init(),
+        overrides: SummarizeOverrides = .init()
     ) async -> CLIResult {
         let txPath = session.appendingPathComponent("transcript.txt")
         let smPath = session.appendingPathComponent("summary.md")
@@ -457,7 +388,7 @@ final class PipelineRunner {
 
         let effectiveConfig = applyOverrides(overrides, to: config)
         logger.info(
-            "re-summarize: \(txPath.path) backend=\(effectiveConfig.llmBackend) model=\(effectiveConfig.llmModel)",
+            "re-summarize: \(txPath.path) backend=\(effectiveConfig.llmBackend) model=\(effectiveConfig.llmModel)"
         )
 
         let previousState = state
@@ -476,7 +407,7 @@ final class PipelineRunner {
                     transcript: transcript,
                     summaryPath: smPath,
                     config: effectiveConfig,
-                    prompt: prompt,
+                    prompt: prompt
                 )
                 return CLIResult(ok: true, error: "")
             } catch is CancellationError {

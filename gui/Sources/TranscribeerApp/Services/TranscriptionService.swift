@@ -1,5 +1,6 @@
 import Foundation
 import WhisperKit
+import TranscribeerCore
 
 /// A single transcribed segment with timing info.
 struct TranscriptSegment: Sendable {
@@ -28,6 +29,8 @@ final class TranscriptionService {
     var liveSegments: [TranscriptSegment] = []
 
     private var whisperKit: WhisperKit?
+    private var loadedModelName: String?
+    private var loadedModelRepo: String?
 
     /// The currently running transcription. Stored so the caller can cancel it.
     private var activeTask: Task<[TranscriptSegment], Error>?
@@ -44,24 +47,30 @@ final class TranscriptionService {
         melCompute: .cpuAndGPU,
         audioEncoderCompute: .cpuAndNeuralEngine,
         textDecoderCompute: .cpuAndNeuralEngine,
-        prefillCompute: .cpuOnly,
+        prefillCompute: .cpuOnly
     )
 
     /// Load (and download if needed) a WhisperKit model.
     ///
-    /// - Parameter name: WhisperKit model identifier, matching a folder in
-    ///   `argmaxinc/whisperkit-coreml` (e.g. `"openai_whisper-large-v3_turbo"`).
-    ///   Legacy short names (e.g. `"large-v3-turbo"`) are migrated automatically.
-    func loadModel(name: String = "openai_whisper-large-v3_turbo") async throws {
-        guard modelState != .loaded else { return }
+    /// - Parameters:
+    ///   - name: WhisperKit model identifier (e.g. `"openai_whisper-large-v3_turbo"`).
+    ///     Legacy short names (e.g. `"large-v3-turbo"`) are migrated automatically.
+    ///   - repo: Optional HuggingFace repo (`"owner/repo-name"`) to download from.
+    ///     Pass `nil` to use the default `argmaxinc/whisperkit-coreml` repo.
+    func loadModel(name: String = "openai_whisper-large-v3_turbo", repo: String? = nil) async throws {
+        let modelRepo = repo.flatMap { $0.isEmpty ? nil : $0 }
+        let alreadyLoaded = modelState == .loaded
+            && loadedModelName == name
+            && loadedModelRepo == modelRepo
+        guard !alreadyLoaded else { return }
 
         let downloadBase = Self.modelsDir
         try FileManager.default.createDirectory(
-            at: downloadBase, withIntermediateDirectories: true,
+            at: downloadBase, withIntermediateDirectories: true
         )
 
         let canonical = AppConfig.canonicalWhisperModel(name)
-        let cachedFolder = Self.cachedModelFolder(variant: canonical, downloadBase: downloadBase)
+        let cachedFolder = Self.cachedModelFolder(variant: canonical, downloadBase: downloadBase, repo: modelRepo)
 
         // If the model is already on disk, skip the download branch entirely and
         // start from the load state. Otherwise WhisperKit would still hit the network
@@ -71,13 +80,14 @@ final class TranscriptionService {
         let config = WhisperKitConfig(
             model: canonical,
             downloadBase: downloadBase,
+            modelRepo: modelRepo,
             modelFolder: cachedFolder?.path,
             computeOptions: Self.aneComputeOptions,
             verbose: false,
             logLevel: .none,
             prewarm: true,
             load: true,
-            download: cachedFolder == nil,
+            download: cachedFolder == nil
         )
 
         let kit = try await WhisperKit(config)
@@ -89,15 +99,29 @@ final class TranscriptionService {
 
         whisperKit = kit
         modelState = kit.modelState
+        loadedModelName = name
+        loadedModelRepo = modelRepo
     }
 
     /// Returns the on-disk folder for a WhisperKit variant if it's already been
     /// downloaded, matching the layout `HubApi` produces under `downloadBase`.
-    private static func cachedModelFolder(variant: String, downloadBase: URL) -> URL? {
+    private static func cachedModelFolder(variant: String, downloadBase: URL, repo: String?) -> URL? {
+        let owner: String
+        let repoName: String
+        if let repo {
+            let parts = repo.split(separator: "/", maxSplits: 1)
+            guard parts.count == 2 else { return nil }
+            owner = String(parts[0])
+            repoName = String(parts[1])
+        } else {
+            owner = "argmaxinc"
+            repoName = "whisperkit-coreml"
+        }
+
         let folder = downloadBase
             .appendingPathComponent("models", isDirectory: true)
-            .appendingPathComponent("argmaxinc", isDirectory: true)
-            .appendingPathComponent("whisperkit-coreml", isDirectory: true)
+            .appendingPathComponent(owner, isDirectory: true)
+            .appendingPathComponent(repoName, isDirectory: true)
             .appendingPathComponent(variant, isDirectory: true)
 
         // Minimum viable set of CoreML bundles WhisperKit needs to load.
@@ -125,7 +149,7 @@ final class TranscriptionService {
     /// - Returns: Array of timestamped transcript segments.
     func transcribe(
         audioURL: URL,
-        language: String = "auto",
+        language: String = "auto"
     ) async throws -> [TranscriptSegment] {
         if whisperKit == nil || modelState != .loaded {
             try await loadModel()
@@ -141,7 +165,7 @@ final class TranscriptionService {
         // When language is known, skip Whisper's temperature-fallback cascade
         // (up to 5 retries per chunk at increasing temperatures). The fallback
         // is designed for mixed-language or noisy audio — with an explicit
-        // language it's pure overhead and can 5× the wall time.
+        // language it's pure overhead and can 5x the wall time.
         //
         // `skipSpecialTokens: true` is important: WhisperKit defaults to
         // `false`, which leaks `<|startoftranscript|>`, `<|he|>`, `<|0.00|>`,
@@ -154,7 +178,7 @@ final class TranscriptionService {
             temperatureFallbackCount: explicitLanguage ? 0 : 5,
             detectLanguage: !explicitLanguage,
             skipSpecialTokens: true,
-            chunkingStrategy: .vad,
+            chunkingStrategy: .vad
         )
 
         // Throttled, main-actor-safe progress sink. The KVO callback can fire
@@ -167,7 +191,7 @@ final class TranscriptionService {
 
         let observation = kit.progress.observe(
             \.fractionCompleted,
-            options: [.new],
+            options: [.new]
         ) { reported, _ in
             progressSink.submit(reported.fractionCompleted)
         }
@@ -181,7 +205,7 @@ final class TranscriptionService {
                 TranscriptSegment(
                     start: Double(seg.start),
                     end: Double(seg.end),
-                    text: seg.text.trimmingCharacters(in: .whitespaces),
+                    text: seg.text.trimmingCharacters(in: .whitespaces)
                 )
             }
             Task { @MainActor in
@@ -201,13 +225,13 @@ final class TranscriptionService {
             try Task.checkCancellation()
             let results = try await kit.transcribe(
                 audioPath: audioPath,
-                decodeOptions: options,
+                decodeOptions: options
             )
             return results.flatMap(\.segments).map { segment in
                 TranscriptSegment(
                     start: Double(segment.start),
                     end: Double(segment.end),
-                    text: segment.text.trimmingCharacters(in: .whitespaces),
+                    text: segment.text.trimmingCharacters(in: .whitespaces)
                 )
             }
         }
@@ -233,6 +257,8 @@ final class TranscriptionService {
             await kit.unloadModels()
         }
         modelState = .unloaded
+        loadedModelName = nil
+        loadedModelRepo = nil
         progress = nil
         liveSegments = []
     }
@@ -247,7 +273,7 @@ private final class ProgressSink: @unchecked Sendable {
     private var lastValue: Double = -1
     private let emit: @Sendable (Double) -> Void
 
-    /// Minimum delta before a new value is forwarded (≈ 1 percentage point).
+    /// Minimum delta before a new value is forwarded (1 percentage point).
     private static let threshold: Double = 0.01
 
     init(emit: @escaping @Sendable (Double) -> Void) {
@@ -269,7 +295,8 @@ enum TranscriptionError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .modelNotLoaded: "Whisper model is not loaded."
+        case .modelNotLoaded:
+            return "Whisper model is not loaded."
         }
     }
 }

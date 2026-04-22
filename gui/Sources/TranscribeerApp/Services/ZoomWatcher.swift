@@ -1,4 +1,5 @@
 import AppKit
+import TranscribeerCore
 import os
 
 /// Watches for active Zoom meetings via NSWorkspace polling.

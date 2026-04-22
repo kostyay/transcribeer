@@ -1,6 +1,10 @@
 # macOS
 .DS_Store
 
+# Python
+__pycache__/
+*.pyc
+
 # Swift build artifacts
 gui/.build/
 
@@ -12,6 +16,16 @@ gui/.build/
 .worktrees/
 docs/
 test/
+.agents/
+.pi/
+.tickets/
+skills-lock.json
+
+# App bundles (dev builds)
+gui/Transcribeer.app/
+
+# Obsidian plugin build output
+obsidian-plugin/main.js
 
 # Secrets / env
 .env

@@ -68,7 +68,7 @@ struct HistoryView: View {
                         let result = await runner.transcribeSession(
                             session.path,
                             config: config,
-                            languageOverride: languageOverride,
+                            languageOverride: languageOverride
                         )
                         statusText = result.ok
                             ? "Transcription done."
@@ -86,8 +86,8 @@ struct HistoryView: View {
                             overrides: .init(
                                 backend: request.backend,
                                 model: request.model,
-                                focus: request.focus,
-                            ),
+                                focus: request.focus
+                            )
                         )
                         statusText = result.ok
                             ? "Summary done."
@@ -100,7 +100,7 @@ struct HistoryView: View {
                 },
                 onDelete: {
                     deleteSession(session)
-                },
+                }
             )
         } else {
             ContentUnavailableView(
@@ -207,17 +207,17 @@ private struct SessionRow: View {
             artifactIcon(
                 systemName: "waveform",
                 present: session.hasAudio,
-                help: session.hasAudio ? "Audio recorded" : "No audio",
+                help: session.hasAudio ? "Audio recorded" : "No audio"
             )
             artifactIcon(
                 systemName: "text.alignleft",
                 present: session.hasTranscript,
-                help: session.hasTranscript ? "Transcript available" : "Not transcribed",
+                help: session.hasTranscript ? "Transcript available" : "Not transcribed"
             )
             artifactIcon(
                 systemName: "sparkles",
                 present: session.hasSummary,
-                help: session.hasSummary ? "Summary available" : "Not summarized",
+                help: session.hasSummary ? "Summary available" : "Not summarized"
             )
         }
     }
