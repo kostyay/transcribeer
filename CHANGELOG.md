@@ -2,6 +2,14 @@
 
 All notable changes are documented here.
 
+## feat/openoats-capture-rewrite
+
+Replaced the single-stream ScreenCaptureKit audio capture with a split-source architecture that records microphone and system audio as separate tracks. This eliminates the need for Screen Recording permission — macOS now prompts only for Microphone and the new System Audio Recording entitlement. Each session stores `audio.mic.caf`, `audio.sys.caf`, and `timing.json` alongside the mixed `audio.m4a`, enabling per-source transcription with accurate timeline alignment.
+
+The mixed output is now 48 kHz AAC at 128 kbps (up from 16 kHz), significantly improving transcription quality for high-pitched voices and fast speech. Speaker labels are configurable in Settings under the new **Audio** tab: set custom "Self" and "Other" labels, choose specific input/output devices, toggle echo cancellation, and optionally enable diarization on the microphone track when multiple people share it. By default diarization is off and the transcript uses your chosen labels directly, removing the previous always-on SpeakerKit overhead for simple two-party calls.
+
+New `make reset-mac-permissions` resets Microphone and System Audio Recording TCC entries (ScreenCapture has been removed). The README and first-run flow have been updated to guide users through the new permission model.
+
 
 
 

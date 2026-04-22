@@ -12,9 +12,6 @@
     <true/>
     <key>com.apple.security.cs.allow-jit</key>
     <true/>
-    <!-- Needed so the app can spawn capture-bin (a child process with its
-         own signature). -->
-    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
-    <true/>
+
 </dict>
 </plist>

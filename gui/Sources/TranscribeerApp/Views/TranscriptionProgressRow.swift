@@ -22,7 +22,13 @@ struct TranscriptionProgressRow: View {
                 .foregroundStyle(.secondary)
                 .frame(minWidth: 140, alignment: .leading)
 
-            if let progress = runner.transcriptionProgress {
+            if let mic = runner.transcriptionService.micProgress,
+               let sys = runner.transcriptionService.sysProgress {
+                VStack(alignment: .leading, spacing: 4) {
+                    sourceProgressRow(label: "Mic", value: mic)
+                    sourceProgressRow(label: "Sys", value: sys)
+                }
+            } else if let progress = runner.transcriptionProgress {
                 ProgressView(value: progress)
                     .progressViewStyle(.linear)
                 Text("\(Int(progress * 100))%")
@@ -46,6 +52,22 @@ struct TranscriptionProgressRow: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
+    }
+
+    /// Single labelled row for a per-source (mic/sys) progress bar.
+    private func sourceProgressRow(label: String, value: Double) -> some View {
+        HStack(spacing: 4) {
+            Text(label)
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .frame(width: 28, alignment: .leading)
+            ProgressView(value: value)
+                .progressViewStyle(.linear)
+            Text("\(Int(value * 100))%")
+                .font(.system(size: 10).monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 28, alignment: .trailing)
+        }
     }
 
     private var stopButton: some View {

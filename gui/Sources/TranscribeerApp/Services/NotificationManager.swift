@@ -3,17 +3,18 @@ import UserNotifications
 
 /// Wraps UNUserNotificationCenter for transcription notifications.
 enum NotificationManager {
-    static let zoomCategory = "ZOOM_MEETING"
-    static let zoomCountdownCategory = "ZOOM_AUTO_RECORD_COUNTDOWN"
+    static let meetingCategory = "MEETING_DETECTED"
+    static let meetingCountdownCategory = "MEETING_AUTO_RECORD_COUNTDOWN"
     static let recordAction = "record"
     static let cancelAutoRecordAction = "cancel_auto_record"
-    static let zoomCountdownIdentifier = "zoom_auto_record_countdown"
+    static let meetingIdentifier = "meeting_detected"
+    static let meetingCountdownIdentifier = "meeting_auto_record_countdown"
 
     static func setup() {
         let center = UNUserNotificationCenter.current()
 
-        let recordAction = UNNotificationAction(
-            identifier: Self.recordAction,
+        let startAction = UNNotificationAction(
+            identifier: recordAction,
             title: "⏺ Start Recording",
             options: .foreground
         )
@@ -22,120 +23,108 @@ enum NotificationManager {
             title: "Dismiss",
             options: []
         )
-        let zoomCategory = UNNotificationCategory(
-            identifier: Self.zoomCategory,
-            actions: [recordAction, dismissAction],
-            intentIdentifiers: [],
-            options: []
-        )
-
         let cancelAction = UNNotificationAction(
-            identifier: Self.cancelAutoRecordAction,
+            identifier: cancelAutoRecordAction,
             title: "⏹ Cancel",
             options: [.destructive, .foreground]
         )
-        let countdownCategory = UNNotificationCategory(
-            identifier: Self.zoomCountdownCategory,
-            actions: [cancelAction],
-            intentIdentifiers: [],
-            options: []
-        )
 
-        center.setNotificationCategories([zoomCategory, countdownCategory])
+        center.setNotificationCategories([
+            UNNotificationCategory(
+                identifier: meetingCategory,
+                actions: [startAction, dismissAction],
+                intentIdentifiers: [],
+                options: []
+            ),
+            UNNotificationCategory(
+                identifier: meetingCountdownCategory,
+                actions: [cancelAction],
+                intentIdentifiers: [],
+                options: []
+            ),
+        ])
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
-    static func notifyDone(sessionName: String) {
+    /// Post a one-shot notification with `sound = .default` and a fresh UUID
+    /// identifier. Used for the idempotent "transcription complete"-style alerts.
+    private static func postTransient(title: String, body: String) {
         let content = UNMutableNotificationContent()
-        content.title = "Transcription complete"
-        content.body = "Session saved: \(sessionName)"
+        content.title = title
+        content.body = body
         content.sound = .default
-
-        let request = UNNotificationRequest(
+        UNUserNotificationCenter.current().add(UNNotificationRequest(
             identifier: UUID().uuidString,
             content: content,
             trigger: nil
-        )
-        UNUserNotificationCenter.current().add(request)
+        ))
+    }
+
+    static func notifyDone(sessionName: String) {
+        postTransient(title: "Transcription complete", body: "Session saved: \(sessionName)")
     }
 
     static func notifyError(_ message: String) {
-        let content = UNMutableNotificationContent()
-        content.title = "Transcribeer error"
-        content.body = message
-        content.sound = .default
-
-        let request = UNNotificationRequest(
-            identifier: UUID().uuidString,
-            content: content,
-            trigger: nil
-        )
-        UNUserNotificationCenter.current().add(request)
+        postTransient(title: "Transcribeer error", body: message)
     }
 
-    static func sendZoomNotification() {
+    /// "Meeting in progress" prompt — offered while idle, with a Start Recording action.
+    static func sendMeetingNotification(appName: String?) {
         let content = UNMutableNotificationContent()
-        content.title = "Zoom meeting in progress"
+        content.title = appName.map { "\($0) meeting in progress" } ?? "Meeting in progress"
         content.body = "No recording active — want to record this meeting?"
-        content.categoryIdentifier = zoomCategory
+        content.categoryIdentifier = meetingCategory
 
-        let request = UNNotificationRequest(
-            identifier: "zoom_meeting",
+        UNUserNotificationCenter.current().add(UNNotificationRequest(
+            identifier: meetingIdentifier,
             content: content,
             trigger: nil
-        )
-        UNUserNotificationCenter.current().add(request)
+        ))
     }
 
-    static func notifyZoomAutoRecordStarted(title: String?) {
-        let content = UNMutableNotificationContent()
-        content.title = "Recording Zoom meeting"
+    static func notifyMeetingAutoRecordStarted(appName: String?, title: String?) {
+        let heading = appName.map { "Recording \($0) meeting" } ?? "Recording meeting"
+        let body: String
         if let title, !title.isEmpty {
-            content.body = title
+            body = title
         } else {
-            content.body = "Auto-record started."
+            body = "Auto-record started."
         }
-        content.sound = .default
-
-        let request = UNNotificationRequest(
-            identifier: UUID().uuidString,
-            content: content,
-            trigger: nil
-        )
-        UNUserNotificationCenter.current().add(request)
+        postTransient(title: heading, body: body)
     }
 
-    static func cancelZoomNotification() {
+    static func cancelMeetingNotification() {
         let center = UNUserNotificationCenter.current()
-        center.removePendingNotificationRequests(withIdentifiers: ["zoom_meeting"])
-        center.removeDeliveredNotifications(withIdentifiers: ["zoom_meeting"])
+        center.removePendingNotificationRequests(withIdentifiers: [meetingIdentifier])
+        center.removeDeliveredNotifications(withIdentifiers: [meetingIdentifier])
     }
 
     /// Post or update the "auto-recording in Ns…" countdown banner.
     /// Reuses the same identifier so subsequent calls replace the existing
     /// notification in place instead of stacking.
-    static func showZoomCountdown(secondsRemaining: Int, title: String?) {
+    static func showMeetingCountdown(secondsRemaining: Int, appName: String?, title: String?) {
         let content = UNMutableNotificationContent()
-        content.title = "Auto-recording Zoom in \(secondsRemaining)s"
+        let appSuffix = appName.map { " \($0)" } ?? ""
+        content.title = "Auto-recording\(appSuffix) in \(secondsRemaining)s"
         if let title, !title.isEmpty {
             content.body = "\(title) — tap Cancel to skip."
         } else {
             content.body = "Tap Cancel to skip auto-record."
         }
-        content.categoryIdentifier = zoomCountdownCategory
+        content.categoryIdentifier = meetingCountdownCategory
         content.interruptionLevel = .timeSensitive
 
         let request = UNNotificationRequest(
-            identifier: zoomCountdownIdentifier,
+            identifier: meetingCountdownIdentifier,
             content: content,
             trigger: nil
         )
         UNUserNotificationCenter.current().add(request)
     }
 
-    static func cancelZoomCountdown() {
+    static func cancelMeetingCountdown() {
         let center = UNUserNotificationCenter.current()
-        center.removePendingNotificationRequests(withIdentifiers: [zoomCountdownIdentifier])
-        center.removeDeliveredNotifications(withIdentifiers: [zoomCountdownIdentifier])
+        center.removePendingNotificationRequests(withIdentifiers: [meetingCountdownIdentifier])
+        center.removeDeliveredNotifications(withIdentifiers: [meetingCountdownIdentifier])
     }
 }

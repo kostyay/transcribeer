@@ -1,9 +1,8 @@
 GITHUB_USER  = moshebe
 BIN_DIR      = $(HOME)/.transcribeer/bin
-ENTITLEMENTS     = capture/capture.entitlements.plist
 APP_ENTITLEMENTS = gui/Transcribeer.entitlements.plist
 # Code signing identity. Defaults to a local self-signed cert "Transcribeer Dev"
-# so TCC permissions (mic, screen recording) persist across rebuilds.
+# so TCC permissions (microphone, system audio recording) persist across rebuilds.
 # Create once via Keychain Access → Certificate Assistant → Create a Certificate
 # (Name: "Transcribeer Dev", Identity Type: Self Signed Root, Type: Code Signing).
 # Override to "-" for ad-hoc, or to a Developer ID for release builds.
@@ -35,7 +34,7 @@ DEV_VARIANT_NAME     = Transcribeer (dev)
 OBSIDIAN_VAULT ?= $(HOME)/Library/Mobile Documents/com~apple~CloudDocs/$(shell id -un)
 OBSIDIAN_PLUGIN_DIR = $(OBSIDIAN_VAULT)/.obsidian/plugins/transcribeer
 
-.PHONY: gui gui-build build-dev build-dev-variant gui-dev-variant capture test-capture logs help dev dev-uninstall dev-restart obsidian-plugin lint lint-fix lint-strict clean e2e e2e-hebrew reset-mac-permissions sign check-identity setup-dev-cert
+.PHONY: gui gui-build build-dev build-dev-variant gui-dev-variant logs help dev dev-uninstall dev-restart obsidian-plugin lint lint-fix lint-strict clean reset-mac-permissions sign check-identity setup-dev-cert verify-capture
 
 help:
 	@echo "dev targets:"
@@ -47,10 +46,8 @@ help:
 	@echo "  make gui-build          build Swift binary only (no bundle)"
 	@echo "  make build-dev-variant  build a side-by-side 'dev' bundle that runs alongside a main install"
 	@echo "  make gui-dev-variant    build-dev-variant + launch"
-	@echo "  make capture        rebuild capture-bin → ~/.transcribeer/bin"
-	@echo "  make test-capture   test capture-bin directly (5s recording)"
-	@echo "  make reset-mac-permissions  kill processes + reset mic/screen TCC entries"
-	@echo "  make sign           resign app bundle + capture-bin with CODESIGN_IDENTITY"
+	@echo "  make reset-mac-permissions  kill processes + reset mic/system-audio TCC entries"
+	@echo "  make sign           resign app bundle with CODESIGN_IDENTITY"
 	@echo "  make check-identity validate CODESIGN_IDENTITY exists in keychain"
 	@echo "  make setup-dev-cert create local self-signed code signing cert (idempotent)"
 	@echo "  make logs           stream transcribeer process logs"
@@ -58,7 +55,8 @@ help:
 	@echo "  make lint           run swiftlint (requires: brew install swiftlint)"
 	@echo "  make lint-fix       auto-fix swiftlint-correctable violations"
 	@echo "  make lint-strict    run swiftlint with --strict (warnings fail)"
-	@echo "  make e2e-hebrew     run the Hebrew loopback e2e test (needs capture-bin + ANTHROPIC_API_KEY)"
+	@echo "  make verify-capture  manual real-audio pipeline check (needs built .app + TCC)"
+
 
 # ── lint ──────────────────────────────────────────────────────────────────────
 lint:
@@ -73,9 +71,13 @@ lint-strict:
 	@command -v swiftlint >/dev/null || { echo "swiftlint not installed. Run: brew install swiftlint"; exit 1; }
 	swiftlint lint --strict --config $(PROJECT_DIR)/.swiftlint.yml
 
+# ── verify capture (manual E2E, needs built .app + TCC) ────────────────────
+verify-capture:
+	@bash $(PROJECT_DIR)/scripts/verify-capture.sh
+
 # ── clean ─────────────────────────────────────────────────────────────────────
 clean:
-	rm -rf gui/.build capture/.build
+	rm -rf gui/.build
 	@echo "✓ build caches cleared"
 
 # ── dev install + launch agent ────────────────────────────────────────────────
@@ -173,16 +175,10 @@ check-identity:
 		echo "✓ codesign identity: $(EFFECTIVE_IDENTITY)"; \
 	fi
 
-# sign: (re)sign existing app bundle + capture-bin with $(CODESIGN_IDENTITY)
-# without rebuilding. Useful after changing CODESIGN_IDENTITY or when a prior
-# build used ad-hoc.
+# sign: (re)sign existing app bundle with $(CODESIGN_IDENTITY) without
+# rebuilding. Useful after changing CODESIGN_IDENTITY or when a prior build
+# used ad-hoc.
 sign: check-identity
-	@if [ -f $(BIN_DIR)/capture-bin ]; then \
-		echo "→ signing capture-bin"; \
-		codesign --force --sign "$(EFFECTIVE_IDENTITY)" --entitlements $(ENTITLEMENTS) --options runtime $(BIN_DIR)/capture-bin; \
-	else \
-		echo "→ skip capture-bin (not built)"; \
-	fi
 	@if [ -d $(APP_BUNDLE) ]; then \
 		echo "→ signing $(APP_BUNDLE)"; \
 		codesign --force --deep --sign "$(EFFECTIVE_IDENTITY)" --entitlements $(APP_ENTITLEMENTS) --options runtime $(APP_BUNDLE) 2>/dev/null || \
@@ -191,11 +187,9 @@ sign: check-identity
 		echo "→ skip app bundle (not built)"; \
 	fi
 	@echo "✓ signed. Current state:"
-	@[ -f $(BIN_DIR)/capture-bin ] && codesign -dv $(BIN_DIR)/capture-bin 2>&1 | grep -E 'Authority|Signature|Identifier' | sed 's/^/    capture-bin: /' || true
 	@[ -d $(APP_BUNDLE) ] && codesign -dv $(APP_BUNDLE) 2>&1 | grep -E 'Authority|Signature|Identifier' | sed 's/^/    app-bundle:  /' || true
 
-dev: setup-dev-cert capture build-dev
-dev: setup-dev-cert capture build-dev
+dev: setup-dev-cert build-dev
 	@mkdir -p $(LOG_DIR)
 	@if launchctl list $(PLIST_LABEL) >/dev/null 2>&1; then \
 		launchctl kickstart -k gui/$$(id -u)/$(PLIST_LABEL); \
@@ -223,10 +217,9 @@ gui-build:
 
 build-dev: gui-build
 	@mkdir -p $(APP_MACOS) $(APP_RESOURCES)
+	@rm -f $(APP_MACOS)/capture-bin
 	@cmp -s gui/.build/release/TranscribeerApp $(APP_MACOS)/TranscribeerApp || \
 		cp gui/.build/release/TranscribeerApp $(APP_MACOS)/TranscribeerApp
-	@cmp -s $(BIN_DIR)/capture-bin $(APP_MACOS)/capture-bin 2>/dev/null || \
-		cp $(BIN_DIR)/capture-bin $(APP_MACOS)/capture-bin 2>/dev/null || true
 	@cmp -s gui/Info.plist $(APP_CONTENTS)/Info.plist || \
 		cp gui/Info.plist $(APP_CONTENTS)/Info.plist
 	@if [ -f assets/logo.png ]; then \
@@ -256,7 +249,7 @@ gui: build-dev
 	open $(APP_BUNDLE)
 
 # ── side-by-side dev variant ──────────────────────────────────────────────────
-# Rebuilds the main bundle first (so binary + capture-bin + icon are fresh),
+# Rebuilds the main bundle first (so binary + icon are fresh),
 # then copies it to Transcribeer-dev.app and rewrites the Info.plist to use a
 # distinct bundle id and display name. Ad-hoc re-signed because any Info.plist
 # change invalidates the bundle's existing signature.
@@ -289,59 +282,26 @@ build-dev-variant: build-dev
 gui-dev-variant: build-dev-variant
 	open -n $(DEV_VARIANT_BUNDLE)
 
-# ── capture-bin ───────────────────────────────────────────────────────────────
-capture:
-	mkdir -p $(BIN_DIR)
-	cd capture && swift build -c release -q
-	cp capture/.build/release/capture $(BIN_DIR)/capture-bin
-	chmod +x $(BIN_DIR)/capture-bin
-	codesign --force --sign "$(EFFECTIVE_IDENTITY)" --entitlements $(ENTITLEMENTS) --options runtime $(BIN_DIR)/capture-bin
-
 # ── reset macOS TCC permissions ──────────────────────────────────────────────
 # Use when macOS is confused about mic/screen-recording grants after ad-hoc
 # signature changes. Kills running instances, clears TCC entries for the app
-# bundle ID and the standalone capture-bin, then you can relaunch to re-prompt.
+# bundle ID, then you can relaunch to re-prompt.
 reset-mac-permissions:
 	@echo "→ killing running instances"
 	-pkill -f TranscribeerApp 2>/dev/null || true
-	-pkill -f capture-bin 2>/dev/null || true
-	@echo "→ resetting user-level TCC (Microphone, ScreenCapture, SystemPolicyAllFiles)"
-	-@for svc in Microphone ScreenCapture SystemPolicyAllFiles; do \
+	@echo "→ resetting user-level TCC (Microphone, SystemAudioRecording, SystemPolicyAllFiles)"
+	-@for svc in Microphone SystemAudioRecording SystemPolicyAllFiles; do \
 		tccutil reset $$svc com.transcribeer.menubar 2>/dev/null || true; \
 	done
 	@echo "→ resetting system-level TCC (Accessibility, ListenEvent, PostEvent) — needs sudo"
 	-@for svc in Accessibility ListenEvent PostEvent; do \
 		sudo tccutil reset $$svc com.transcribeer.menubar 2>/dev/null || true; \
 	done
-	@echo "→ resetting TCC for standalone capture-bin (no bundle ID → resets all)"
-	-tccutil reset Microphone 2>/dev/null || true
-	-tccutil reset ScreenCapture 2>/dev/null || true
 	@echo "✓ done. Relaunch with: make gui"
-
-# ── test capture directly (terminal has TCC) ─────────────────────────────────
-test-capture:
-	@mkdir -p /tmp/transcribeer-test
-	@echo "Recording 5s to /tmp/transcribeer-test/test.wav — press Ctrl+C to stop early"
-	$(BIN_DIR)/capture-bin /tmp/transcribeer-test/test.wav 5
-	@ls -lh /tmp/transcribeer-test/test.wav
-
-# ── e2e: Hebrew audio-loopback test ──────────────────────────────────────────
-# Records system audio while playing the ivrit.ai Hebrew sample, transcribes
-# with the default WhisperKit model, then asks Claude to compare the result
-# to the reference transcript. Requires:
-#   - capture-bin installed (make capture) + Screen Recording TCC granted
-#   - $$ANTHROPIC_API_KEY in the environment
-# Extra env passthrough: LANGUAGE, MODEL, SAMPLE_WAV, CAPTURE_BIN, ARTIFACTS_DIR
-e2e-hebrew:
-	@test -x $(BIN_DIR)/capture-bin || { echo "capture-bin missing — run: make capture"; exit 1; }
-	@test -n "$$ANTHROPIC_API_KEY" || { echo "ANTHROPIC_API_KEY not set"; exit 1; }
-	bash $(PROJECT_DIR)/tests/e2e/hebrew-loopback.sh
-
-e2e: e2e-hebrew
 
 # ── logs ──────────────────────────────────────────────────────────────────────
 logs:
-	log stream --predicate 'process == "TranscribeerApp" OR process == "capture-bin"' --level debug
+	log stream --predicate 'process == "TranscribeerApp"' --level debug
 
 # ── Obsidian plugin ───────────────────────────────────────────────────────────
 obsidian-plugin:

@@ -26,9 +26,108 @@ struct Session: Identifiable, Equatable {
     /// same cases as `startedAt` and also while a recording is still in
     /// progress.
     let endedAt: Date?
+}
 
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.id == rhs.id
+/// A single meeting participant observed during a recording session.
+///
+/// Persisted as one entry in `meta.json`'s `participants` array. The flags
+/// reflect whether the participant was **ever** seen with that role during
+/// the meeting — they are OR-ed across observations, never cleared.
+struct SessionParticipant: Equatable, Sendable {
+    let name: String
+    let firstSeenAt: Date
+    let lastSeenAt: Date
+    let isMe: Bool
+    let isHost: Bool
+    let isCoHost: Bool
+    let isGuest: Bool
+
+    /// Build a new participant observed right now. Convenience for the
+    /// recorder — both timestamps collapse to `observedAt`.
+    init(
+        name: String,
+        observedAt: Date,
+        isMe: Bool = false,
+        isHost: Bool = false,
+        isCoHost: Bool = false,
+        isGuest: Bool = false,
+    ) {
+        self.init(
+            name: name,
+            firstSeenAt: observedAt,
+            lastSeenAt: observedAt,
+            isMe: isMe,
+            isHost: isHost,
+            isCoHost: isCoHost,
+            isGuest: isGuest,
+        )
+    }
+
+    init(
+        name: String,
+        firstSeenAt: Date,
+        lastSeenAt: Date,
+        isMe: Bool,
+        isHost: Bool,
+        isCoHost: Bool,
+        isGuest: Bool,
+    ) {
+        self.name = name
+        self.firstSeenAt = firstSeenAt
+        self.lastSeenAt = lastSeenAt
+        self.isMe = isMe
+        self.isHost = isHost
+        self.isCoHost = isCoHost
+        self.isGuest = isGuest
+    }
+
+    /// Merge a newer observation into this record:
+    /// - keep the earlier `firstSeenAt`,
+    /// - take the later `lastSeenAt`,
+    /// - OR-accumulate role flags (host/guest/me/co-host never "downgrade").
+    func merged(with observation: Self) -> Self {
+        Self(
+            name: name,
+            firstSeenAt: min(firstSeenAt, observation.firstSeenAt),
+            lastSeenAt: max(lastSeenAt, observation.lastSeenAt),
+            isMe: isMe || observation.isMe,
+            isHost: isHost || observation.isHost,
+            isCoHost: isCoHost || observation.isCoHost,
+            isGuest: isGuest || observation.isGuest,
+        )
+    }
+
+    // MARK: - meta.json (de)serialization
+
+    init?(dict: [String: Any]) {
+        guard let name = dict["name"] as? String, !name.isEmpty else { return nil }
+        let formatter = SessionManager.isoFormatter
+        let firstSeen = (dict["firstSeenAt"] as? String).flatMap(formatter.date(from:))
+        let lastSeen = (dict["lastSeenAt"] as? String).flatMap(formatter.date(from:))
+        // A participant without timestamps isn't useful for history ordering
+        // — skip it rather than silently fabricating `.distantPast`.
+        guard let firstSeen, let lastSeen else { return nil }
+        self.init(
+            name: name,
+            firstSeenAt: firstSeen,
+            lastSeenAt: lastSeen,
+            isMe: dict["isMe"] as? Bool ?? false,
+            isHost: dict["isHost"] as? Bool ?? false,
+            isCoHost: dict["isCoHost"] as? Bool ?? false,
+            isGuest: dict["isGuest"] as? Bool ?? false,
+        )
+    }
+
+    func dict(using formatter: ISO8601DateFormatter) -> [String: Any] {
+        [
+            "name": name,
+            "firstSeenAt": formatter.string(from: firstSeenAt),
+            "lastSeenAt": formatter.string(from: lastSeenAt),
+            "isMe": isMe,
+            "isHost": isHost,
+            "isCoHost": isCoHost,
+            "isGuest": isGuest,
+        ]
     }
 }
 
@@ -45,12 +144,23 @@ struct SessionDetail {
     let audioURL: URL?
     /// Per-session language override, or `nil` to fall back to the global default.
     let language: String?
+    /// Meeting participants observed while this session was being recorded,
+    /// in the order they were first seen. Empty when no Zoom meeting was
+    /// associated, the participants panel stayed closed, or the meeting
+    /// exceeded the `maxMeetingParticipants` threshold.
+    let participants: [SessionParticipant]
 }
 
 // MARK: - Session Manager
 
 enum SessionManager {
     /// List session dirs sorted most-recent first.
+    ///
+    /// Ordering uses each session's logical start time (`Session.date`), which
+    /// prefers the `startedAt` wall-clock written during recording and falls
+    /// back to the directory's filesystem creation date for imported or
+    /// legacy sessions. This keeps split sessions adjacent to their originals
+    /// instead of jumping to the top of the list.
     static func listSessions(sessionsDir: String) -> [Session] {
         let dir = URL(fileURLWithPath: (sessionsDir as NSString).expandingTildeInPath)
         guard let contents = try? FileManager.default.contentsOfDirectory(
@@ -61,8 +171,8 @@ enum SessionManager {
 
         return contents
             .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true }
-            .sorted { creationDate(of: $0) > creationDate(of: $1) }
             .map(sessionRow)
+            .sorted { $0.date > $1.date }
     }
 
     /// Create a new session directory.
@@ -87,7 +197,12 @@ enum SessionManager {
         let meta = readMeta(dir)
         let rawName = meta["name"] as? String ?? ""
         let displayName = rawName.isEmpty ? dir.lastPathComponent : rawName
-        let creationDate = creationDate(of: dir)
+        let startedAt = parseDate(meta["startedAt"])
+        // Prefer the recorded wall-clock start over the directory's creation
+        // date so sessions created by `SessionSplitter` (and any future
+        // back-dated flows) sort next to their originals. Falls back to the
+        // filesystem creation date for imports and pre-`startedAt` sessions.
+        let sortDate = startedAt ?? creationDate(of: dir)
         let fileManager = FileManager.default
         let hasTranscript = fileManager.fileExists(
             atPath: dir.appendingPathComponent("transcript.txt").path,
@@ -101,15 +216,15 @@ enum SessionManager {
             path: dir,
             name: displayName,
             isUntitled: rawName.isEmpty,
-            date: creationDate,
-            formattedDate: dateFormatter.string(from: creationDate),
+            date: sortDate,
+            formattedDate: dateFormatter.string(from: sortDate),
             duration: audioDuration(dir),
             snippet: snippet(dir),
             language: meta["language"] as? String,
             hasAudio: audioURL(in: dir) != nil,
             hasTranscript: hasTranscript,
             hasSummary: hasSummary,
-            startedAt: parseDate(meta["startedAt"]),
+            startedAt: startedAt,
             endedAt: parseDate(meta["endedAt"]),
         )
     }
@@ -123,7 +238,7 @@ enum SessionManager {
         return SessionDetail(
             name: meta["name"] as? String ?? "",
             notes: meta["notes"] as? String ?? "",
-            date: dateFormatter.string(from: creationDate(of: dir)),
+            date: dateFormatter.string(from: parseDate(meta["startedAt"]) ?? creationDate(of: dir)),
             duration: audioDuration(dir),
             transcript: (try? String(contentsOf: txPath, encoding: .utf8)) ?? "",
             summary: (try? String(contentsOf: smPath, encoding: .utf8)) ?? "",
@@ -131,6 +246,7 @@ enum SessionManager {
             canSummarize: FileManager.default.fileExists(atPath: txPath.path),
             audioURL: audio,
             language: meta["language"] as? String,
+            participants: decodeParticipants(meta["participants"]),
         )
     }
 
@@ -184,6 +300,68 @@ enum SessionManager {
         writeMeta(dir, data)
     }
 
+    /// Merge a fresh observation of meeting participants into the session's
+    /// persisted list. Called by the participants recorder while a recording
+    /// is in progress; safe to call repeatedly — existing entries are updated,
+    /// new names appended. Call-order semantics:
+    ///
+    /// - Match by `name` (case-sensitive).
+    /// - Existing entry: `firstSeenAt` preserved, `lastSeenAt` bumped, role
+    ///   flags OR-ed (once someone was host, they stay "was host" in history).
+    /// - New entry: appended in the order it appears in `observed`.
+    ///
+    /// Returns the merged list so the caller can re-render without re-reading.
+    @discardableResult
+    static func appendParticipants(
+        _ dir: URL,
+        observed: [SessionParticipant],
+    ) -> [SessionParticipant] {
+        var data = readMeta(dir)
+        let existing = decodeParticipants(data["participants"])
+        let merged = mergeParticipants(existing: existing, observed: observed)
+        if merged == existing { return merged }
+        data["participants"] = merged.map(encodeParticipant)
+        writeMeta(dir, data)
+        return merged
+    }
+
+    /// Pure merge logic. Extracted for unit testing.
+    static func mergeParticipants(
+        existing: [SessionParticipant],
+        observed: [SessionParticipant],
+    ) -> [SessionParticipant] {
+        var byName: [String: SessionParticipant] = [:]
+        var order: [String] = []
+        for participant in existing {
+            byName[participant.name] = participant
+            order.append(participant.name)
+        }
+        for observation in observed {
+            if let prior = byName[observation.name] {
+                byName[observation.name] = prior.merged(with: observation)
+            } else {
+                byName[observation.name] = observation
+                order.append(observation.name)
+            }
+        }
+        return order.compactMap { byName[$0] }
+    }
+
+    /// Read the stored participants list. Returns an empty array when the
+    /// session has none yet (or when the JSON is malformed).
+    static func readParticipants(_ dir: URL) -> [SessionParticipant] {
+        decodeParticipants(readMeta(dir)["participants"])
+    }
+
+    private static func decodeParticipants(_ raw: Any?) -> [SessionParticipant] {
+        guard let array = raw as? [[String: Any]] else { return [] }
+        return array.compactMap(SessionParticipant.init(dict:))
+    }
+
+    private static func encodeParticipant(_ participant: SessionParticipant) -> [String: Any] {
+        participant.dict(using: isoFormatter)
+    }
+
     static func setLanguage(_ dir: URL, _ language: String?) {
         var data = readMeta(dir)
         if let language, !language.isEmpty {
@@ -217,7 +395,9 @@ enum SessionManager {
 
     /// ISO-8601 with fractional seconds — matches what Foundation's
     /// `ISO8601DateFormatter` produces by default and round-trips cleanly.
-    private static let isoFormatter: ISO8601DateFormatter = {
+    /// ISO-8601 formatter shared with `SessionParticipant` encoding so all
+    /// dates written to `meta.json` round-trip against the same parser.
+    static let isoFormatter: ISO8601DateFormatter = {
         let fmt = ISO8601DateFormatter()
         fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return fmt
