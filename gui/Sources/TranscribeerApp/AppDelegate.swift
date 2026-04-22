@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         logger.info("startup complete")
     }
 
+    @MainActor
     private func configureAppIcon() {
         guard let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns") else {
             logger.error("AppIcon.icns missing from bundle resources")
@@ -28,6 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return
         }
         NSApp.applicationIconImage = icon
+        DockTileBadger.register(baseIcon: icon)
     }
 
     // MARK: - UNUserNotificationCenterDelegate
@@ -37,20 +39,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
+        defer { completionHandler() }
         let id = response.actionIdentifier
+        let notificationID = response.notification.request.identifier
+
         if id == NotificationManager.cancelAutoRecordAction {
             onCancelAutoRecord?()
-        } else if id == NotificationManager.recordAction
-            || id == UNNotificationDefaultActionIdentifier {
-            // Tapping body of countdown notification should not trigger a
-            // generic "record" action — recording is already queued.
-            if response.notification.request.identifier == NotificationManager.zoomCountdownIdentifier {
-                // no-op — countdown already in progress
-            } else {
-                onRecord?()
-            }
+            return
         }
-        completionHandler()
+
+        let isRecordIntent = id == NotificationManager.recordAction
+            || id == UNNotificationDefaultActionIdentifier
+        // Tapping the body of the countdown notification shouldn't trigger a
+        // generic "record" action — recording is already queued.
+        guard isRecordIntent,
+              notificationID != NotificationManager.meetingCountdownIdentifier
+        else { return }
+        onRecord?()
     }
 
     func userNotificationCenter(

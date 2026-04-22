@@ -21,7 +21,7 @@ final class AudioPlayerVM {
     private var waveformTask: Task<Void, Never>?
 
     private var player: AVAudioPlayer?
-    private var ticker: Timer?
+    private var tickerTask: Task<Void, Never>?
 
     var hasAudio: Bool { player != nil }
 
@@ -101,21 +101,23 @@ final class AudioPlayerVM {
     }
 
     private func startTicker() {
-        ticker = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self, let p = self.player else { return }
+        tickerTask?.cancel()
+        tickerTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled, let self, let p = self.player else { return }
                 self.currentTime = p.currentTime
                 if !p.isPlaying && self.isPlaying {
                     self.isPlaying = false
-                    self.stopTicker()
+                    return
                 }
             }
         }
     }
 
     private func stopTicker() {
-        ticker?.invalidate()
-        ticker = nil
+        tickerTask?.cancel()
+        tickerTask = nil
     }
 }
 
@@ -126,8 +128,18 @@ struct AudioPlayerView: View {
     /// Shared player instance. Owned by the parent so siblings (e.g. the
     /// transcript view's clickable timestamps) can drive playback too.
     let vm: AudioPlayerVM
+    /// Invoked when the user confirms a split at the current playhead.
+    /// `nil` hides the split button (e.g. when the parent has nothing
+    /// sensible to do with the split — imports before a session is saved).
+    var onSplit: ((TimeInterval) -> Void)?
+
+    @State private var showSplitConfirm = false
 
     private static let speeds: [Float] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
+    /// Keep the playhead at least this far from either edge before we allow a
+    /// split — matches `SessionSplitter.minEdgeDistance` so clicking the
+    /// button can never produce a zero-length or full-length split.
+    private static let minSplitEdgeDistance: TimeInterval = 1.0
 
     var body: some View {
         VStack(spacing: 6) {
@@ -192,6 +204,17 @@ struct AudioPlayerView: View {
                 .disabled(!vm.hasAudio)
                 .accessibilityLabel("Skip forward 30 seconds")
 
+                if onSplit != nil {
+                    Button { showSplitConfirm = true } label: {
+                        Image(systemName: "scissors")
+                            .font(.system(size: 13))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canSplit)
+                    .help(splitHelpText)
+                    .accessibilityLabel("Split recording at current time")
+                }
+
                 Spacer()
 
                 // Speed picker
@@ -218,6 +241,9 @@ struct AudioPlayerView: View {
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
+                .help("Playback speed")
+                .accessibilityLabel("Playback speed")
+                .accessibilityValue(speedLabel(vm.rate))
 
                 Text(formatTime(vm.duration))
                     .monospacedDigit()
@@ -231,6 +257,32 @@ struct AudioPlayerView: View {
         .onAppear { vm.load(url: audioURL) }
         .onChange(of: audioURL) { _, newURL in vm.load(url: newURL) }
         .onDisappear { vm.stop() }
+        .confirmationDialog(
+            "Split recording at \(formatTime(vm.currentTime))?",
+            isPresented: $showSplitConfirm,
+            titleVisibility: .visible,
+        ) {
+            Button("Split") {
+                vm.pause()
+                onSplit?(vm.currentTime)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Everything after \(formatTime(vm.currentTime)) is moved to a new session. The original keeps the first \(formatTime(vm.currentTime)).")
+        }
+    }
+
+    private var canSplit: Bool {
+        vm.hasAudio
+            && vm.duration > Self.minSplitEdgeDistance * 2
+            && vm.currentTime >= Self.minSplitEdgeDistance
+            && vm.currentTime <= vm.duration - Self.minSplitEdgeDistance
+    }
+
+    private var splitHelpText: String {
+        canSplit
+            ? "Split recording here (\(formatTime(vm.currentTime)))"
+            : "Move the playhead away from the start or end to split"
     }
 
     private var progressFraction: Double {
