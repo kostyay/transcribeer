@@ -8,6 +8,12 @@ import SwiftUI
 /// the bug we mirror the runner's state into local `@State` via a polling task
 /// started on the label (`.task` runs as long as the label exists). Local
 /// `@State` mutations *do* refresh the menu-bar icon.
+///
+/// When the running bundle identifier ends in `.dev` (i.e. this is a
+/// locally-built dev variant running alongside a main/prod install), a small
+/// orange "D" is overlaid so the two menubar icons can be told apart at a
+/// glance. The check is compiled in unconditionally but is a no-op for a
+/// normally-signed production bundle whose id has no `.dev` suffix.
 struct MenuBarIcon: View {
     let runner: PipelineRunner
     @State private var displayState: AppState = .idle
@@ -20,6 +26,12 @@ struct MenuBarIcon: View {
                     .fill(.red)
                     .frame(width: 6, height: 6)
                     .offset(x: 2, y: -1)
+            }
+            if Self.isDevBuild {
+                Text("D")
+                    .font(.system(size: 8, weight: .heavy, design: .rounded))
+                    .foregroundStyle(.orange)
+                    .offset(x: 5, y: 6)
             }
         }
         .task(id: ObjectIdentifier(runner)) {
@@ -41,4 +53,8 @@ struct MenuBarIcon: View {
         case .error: "exclamationmark.triangle"
         }
     }
+
+    private static let isDevBuild: Bool = {
+        Bundle.main.bundleIdentifier?.hasSuffix(".dev") ?? false
+    }()
 }
