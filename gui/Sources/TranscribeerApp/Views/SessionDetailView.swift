@@ -310,8 +310,23 @@ struct SessionDetailView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            SummaryMarkdownView(text: summaryText)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            VStack(spacing: 0) {
+                usageStrip(detail.summarizationUsage, hidden: isSummarizingThisSession)
+                SummaryMarkdownView(text: summaryText)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
+    /// Leading-aligned strip of pipeline-usage badges shown above the
+    /// summary / transcript bodies. Hidden while the corresponding pipeline
+    /// stage is actively streaming — mid-run metadata is stale.
+    @ViewBuilder
+    private func usageStrip(_ usage: PipelineUsage?, hidden: Bool) -> some View {
+        if let usage, !hidden {
+            HStack { PipelineUsageBadges(usage: usage); Spacer() }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
         }
     }
 
@@ -350,14 +365,17 @@ struct SessionDetailView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            TranscriptView(
-                lines: lines,
-                onSeek: { playerVM.seek(to: $0) },
-                playheadTime: playerVM.hasAudio ? playerVM.currentTime : nil,
-                isStreaming: isTranscribingThisSession,
-                otherLabel: config.audio.otherLabel
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            VStack(spacing: 0) {
+                usageStrip(detail.transcriptionUsage, hidden: isTranscribingThisSession)
+                TranscriptView(
+                    lines: lines,
+                    onSeek: { playerVM.seek(to: $0) },
+                    playheadTime: playerVM.hasAudio ? playerVM.currentTime : nil,
+                    isStreaming: isTranscribingThisSession,
+                    otherLabel: config.audio.otherLabel
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
     }
 
@@ -414,10 +432,21 @@ struct SessionDetailView: View {
             .padding(20)
     }
 
-    // MARK: - Status toast
+    // MARK: - Progress row
 
+    private var showProgressRow: Bool {
+        runner.transcriptionProgress != nil
+            || runner.transcriptionService.modelState.isBusy
+    }
+}
+
+// MARK: - Status toast + export
+
+/// Status-toast and export helpers carved into an extension so the main
+/// struct body stays under SwiftLint's type-body-length cap.
+extension SessionDetailView {
     @ViewBuilder
-    private var statusToast: some View {
+    var statusToast: some View {
         if !statusText.isEmpty {
             HStack(spacing: 8) {
                 Image(systemName: isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
@@ -439,12 +468,12 @@ struct SessionDetailView: View {
         }
     }
 
-    private var isError: Bool {
+    var isError: Bool {
         let lower = statusText.lowercased()
         return lower.contains("failed") || lower.contains("error")
     }
 
-    private func scheduleStatusClear(for newValue: String) {
+    func scheduleStatusClear(for newValue: String) {
         statusClearTask?.cancel()
         guard !newValue.isEmpty, !newValue.hasSuffix("…") else { return }
         statusClearTask = Task { @MainActor in
@@ -454,13 +483,11 @@ struct SessionDetailView: View {
         }
     }
 
-    // MARK: - Export
-
-    private func exportTranscript() {
+    func exportTranscript() {
         export(content: detail.transcript, defaultName: "transcript", ext: "txt")
     }
 
-    private func exportSummary() {
+    func exportSummary() {
         export(content: detail.summary, defaultName: "summary", ext: "md")
     }
 
@@ -475,12 +502,5 @@ struct SessionDetailView: View {
         } catch {
             statusText = "Export failed: \(error.localizedDescription)"
         }
-    }
-
-    // MARK: - Progress row
-
-    private var showProgressRow: Bool {
-        runner.transcriptionProgress != nil
-            || runner.transcriptionService.modelState.isBusy
     }
 }

@@ -65,7 +65,15 @@ struct SummaryMarkdownView: View {
                 .multilineTextAlignment(.leading)
                 .environment(\.layoutDirection, layoutDirection)
                 .environment(\.locale, locale)
-                .padding(16)
+                // Cap the reading column at 80% of the scroll view's width
+                // and center it. Full-width prose is hard to scan on wide
+                // windows; this keeps line lengths comfortable while still
+                // word-wrapping naturally inside the column.
+                .containerRelativeFrame(.horizontal, alignment: .center) { length, _ in
+                    length * 0.8
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
         }
         .background(Color(nsColor: .textBackgroundColor))
         .environment(\.layoutDirection, layoutDirection)

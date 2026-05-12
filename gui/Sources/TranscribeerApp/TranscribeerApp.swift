@@ -211,6 +211,10 @@ struct TranscribeerApp: App {
             )
         }
         meetingDetector.start()
+        // Refresh the chat-model price catalog in the background. The
+        // synchronous lookup is fine before this completes — it falls back
+        // to the bundled table or returns nil.
+        ModelPricingService.shared.refreshIfStale()
         showFirstRunOnboardingIfNeeded()
 
         // Wire notification "Start Recording" action → startRecording

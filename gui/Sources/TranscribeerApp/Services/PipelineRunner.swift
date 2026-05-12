@@ -303,6 +303,7 @@ final class PipelineRunner {
         defer { transcribingSession = nil }
         logger.log("transcription started")
 
+        let startedAt = Date()
         do {
             let result = try await transcriptionService.transcribe(
                 session: session,
@@ -310,6 +311,11 @@ final class PipelineRunner {
             )
             try result.write(to: transcriptPath, atomically: true, encoding: .utf8)
             SessionManager.setLanguage(session, config.language)
+            SessionUsageRecorder.recordTranscription(
+                session: session,
+                config: config,
+                duration: Date().timeIntervalSince(startedAt),
+            )
             logger.log("transcription done")
             return true
         } catch is CancellationError {
@@ -370,6 +376,7 @@ final class PipelineRunner {
             liveSummary = ""
         }
 
+        let startedAt = Date()
         let stream = try await SummarizationService.streamSummarize(
             transcript: transcript,
             backend: config.llmBackend,
@@ -379,12 +386,25 @@ final class PipelineRunner {
         )
 
         var accumulated = ""
-        for try await fragment in stream {
+        var tokenUsage: TokenUsage?
+        for try await event in stream {
             try Task.checkCancellation()
-            accumulated += fragment
-            liveSummary = accumulated
+            switch event {
+            case .textDelta(let fragment):
+                accumulated += fragment
+                liveSummary = accumulated
+            case .completed(let usage):
+                tokenUsage = usage
+            }
         }
         try accumulated.write(to: summaryPath, atomically: true, encoding: .utf8)
+        SessionUsageRecorder.recordSummarization(
+            session: session,
+            config: config,
+            usage: tokenUsage,
+            duration: Date().timeIntervalSince(startedAt),
+        )
+        await SessionDescriptionWriter.write(session: session, summary: accumulated, config: config)
         return accumulated
     }
 
@@ -393,13 +413,30 @@ final class PipelineRunner {
         state = .done(sessionPath: session.path)
         NotificationManager.notifyDone(sessionName: SessionManager.displayName(session))
     }
+}
 
-    // MARK: - History re-runs
+// MARK: - History re-runs
 
+/// History-screen re-run entry points. Carved out into an extension so the
+/// primary `PipelineRunner` body stays under SwiftLint's type-body-length
+/// cap; behaviour is identical to having them inline.
+extension PipelineRunner {
     /// Result of a pipeline operation.
     struct CLIResult {
         let ok: Bool
         let error: String
+    }
+
+    /// Optional one-shot overrides for a single re-summarize call.
+    ///
+    /// `backend`/`model` let the detail view pick a different LLM without
+    /// touching the global config. `focus` is a free-form user note appended
+    /// to the system prompt — typically "focus on X" — so people can steer
+    /// a summary towards a topic without creating a new prompt profile.
+    struct SummarizeOverrides {
+        var backend: String?
+        var model: String?
+        var focus: String?
     }
 
     /// Re-transcribe a session from its audio.
@@ -447,6 +484,7 @@ final class PipelineRunner {
             if case .transcribing = state { state = previousState }
         }
 
+        let startedAt = Date()
         do {
             let result = try await transcriptionService.transcribe(
                 session: session,
@@ -454,6 +492,11 @@ final class PipelineRunner {
             )
             try result.write(to: txPath, atomically: true, encoding: .utf8)
             SessionManager.setLanguage(session, cfg.language)
+            SessionUsageRecorder.recordTranscription(
+                session: session,
+                config: cfg,
+                duration: Date().timeIntervalSince(startedAt),
+            )
             return CLIResult(ok: true, error: "")
         } catch is CancellationError {
             logger.info("re-transcribe cancelled")
@@ -480,18 +523,6 @@ final class PipelineRunner {
         SessionLogger(
             logPath: session.appendingPathComponent("run.log")
         ).log(message)
-    }
-
-    /// Optional one-shot overrides for a single re-summarize call.
-    ///
-    /// `backend`/`model` let the detail view pick a different LLM without
-    /// touching the global config. `focus` is a free-form user note appended
-    /// to the system prompt — typically "focus on X" — so people can steer
-    /// a summary towards a topic without creating a new prompt profile.
-    struct SummarizeOverrides {
-        var backend: String?
-        var model: String?
-        var focus: String?
     }
 
     /// Re-summarize a session from its transcript.

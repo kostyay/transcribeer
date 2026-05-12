@@ -52,11 +52,15 @@ public enum SummarizationService {
     }
 
     /// Load a prompt profile from ~/.transcribeer/prompts/<name>.md.
-    /// Returns nil if the file doesn't exist or name is nil/"default".
+    ///
+    /// `nil` is treated as the `default` profile. Returns nil only when the
+    /// resolved profile has no on-disk file — the caller then falls back to
+    /// the built-in `defaultPrompt`. For `default`, an on-disk file is the
+    /// user's override of that built-in prompt and must be honoured.
     public static func loadPromptProfile(_ name: String?) -> String? {
-        guard let name, name != "default" else { return nil }
+        let resolved = name ?? "default"
         let url = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".transcribeer/prompts/\(name).md")
+            .appendingPathComponent(".transcribeer/prompts/\(resolved).md")
         return try? String(contentsOf: url, encoding: .utf8)
     }
 

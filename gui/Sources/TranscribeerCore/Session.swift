@@ -182,16 +182,41 @@ public enum SessionManager {
     }
 
     private static func snippet(_ dir: URL) -> String {
-        for fname in ["summary.md", "transcript.txt"] {
-            let path = dir.appendingPathComponent(fname)
-            guard let text = try? String(contentsOf: path, encoding: .utf8) else { continue }
-            for line in text.components(separatedBy: .newlines) {
-                let trimmed = line.trimmingCharacters(in: .whitespaces)
-                if !trimmed.isEmpty {
-                    return String(trimmed.prefix(120))
-                }
-            }
+        // Prefer the LLM-generated one-sentence description authored
+        // specifically for sidebar display. Fall back to summary then
+        // transcript, skipping bare markdown headings on the summary so
+        // pre-description sessions show real content.
+        let descriptionPath = dir.appendingPathComponent("description.txt")
+        if let text = try? String(contentsOf: descriptionPath, encoding: .utf8),
+           let line = firstNonEmptyLine(text) {
+            return String(line.prefix(120))
+        }
+        let summaryPath = dir.appendingPathComponent("summary.md")
+        if let text = try? String(contentsOf: summaryPath, encoding: .utf8),
+           let line = firstNonHeadingLine(text) {
+            return String(line.prefix(120))
+        }
+        let transcriptPath = dir.appendingPathComponent("transcript.txt")
+        if let text = try? String(contentsOf: transcriptPath, encoding: .utf8),
+           let line = firstNonEmptyLine(text) {
+            return String(line.prefix(120))
         }
         return ""
+    }
+
+    private static func firstNonEmptyLine(_ text: String) -> String? {
+        text.components(separatedBy: .newlines)
+            .lazy
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { !$0.isEmpty }
+    }
+
+    private static func firstNonHeadingLine(_ text: String) -> String? {
+        let lines = text
+            .components(separatedBy: .newlines)
+            .lazy
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        return lines.first { !$0.hasPrefix("#") } ?? lines.first
     }
 }

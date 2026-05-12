@@ -8,6 +8,14 @@ import TranscribeerCore
 /// stays under SwiftLint's file-length cap.
 struct SessionRow: View {
     let session: Session
+    /// True while the pipeline is actively transcribing this session.
+    /// Swaps the transcript glyph for a spinner so the user can tell at a
+    /// glance which row is being processed without opening detail view.
+    var isTranscribing = false
+    /// True while the pipeline is actively summarizing this session.
+    /// Swaps the summary (sparkles) glyph for a spinner for the same
+    /// reason.
+    var isSummarizing = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -61,17 +69,37 @@ struct SessionRow: View {
                 present: session.hasAudio,
                 help: session.hasAudio ? "Audio recorded" : "No audio"
             )
-            artifactIcon(
-                systemName: "text.alignleft",
-                present: session.hasTranscript,
-                help: session.hasTranscript ? "Transcript available" : "Not transcribed"
-            )
-            artifactIcon(
-                systemName: "sparkles",
-                present: session.hasSummary,
-                help: session.hasSummary ? "Summary available" : "Not summarized"
-            )
+            if isTranscribing {
+                processingSpinner(help: "Transcribing\u{2026}")
+            } else {
+                artifactIcon(
+                    systemName: "text.alignleft",
+                    present: session.hasTranscript,
+                    help: session.hasTranscript ? "Transcript available" : "Not transcribed"
+                )
+            }
+            if isSummarizing {
+                processingSpinner(help: "Summarizing\u{2026}")
+            } else {
+                artifactIcon(
+                    systemName: "sparkles",
+                    present: session.hasSummary,
+                    help: session.hasSummary ? "Summary available" : "Not summarized"
+                )
+            }
         }
+    }
+
+    /// Tiny indeterminate spinner sized to match the artifact glyphs so the
+    /// row height doesn't jitter when processing starts/stops.
+    private func processingSpinner(help: String) -> some View {
+        ProgressView()
+            .controlSize(.mini)
+            .scaleEffect(0.6)
+            .frame(width: 10, height: 10)
+            .tint(.accentColor)
+            .help(help)
+            .accessibilityLabel(help)
     }
 
     private func artifactIcon(systemName: String, present: Bool, help: String) -> some View {

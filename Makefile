@@ -194,36 +194,49 @@ sign: check-identity
 	@echo "✓ signed. Current state:"
 	@[ -d $(APP_BUNDLE) ] && codesign -dv $(APP_BUNDLE) 2>&1 | grep -E 'Authority|Signature|Identifier' | sed 's/^/    app-bundle:  /' || true
 
-# `make dev` stops the running agent BEFORE re-codesigning the bundle so
-# launchd can't try to relaunch into a half-signed binary ("Launch Constraint
-# Violation" / CODESIGNING). The binary inside the bundle is then swapped via
-# atomic rename in `build-dev` so even a still-running instance survives the
-# replace cleanly until launchctl kickstart restarts it below.
+# `make dev` builds the release binary first, then stops and reloads the
+# LaunchAgent only when the signed app bundle must change. Reloading the agent
+# refreshes launchd's code-signing launch constraint after each re-sign; a plain
+# kickstart can keep an old constraint and fail with CODESIGNING / Launch
+# Constraint Violation.
 #
-# To avoid restarting (and thus dropping the menubar) on no-op runs, we record
-# $(APP_STAMP)'s mtime before invoking build-dev. If the stamp didn't move,
-# nothing was rebuilt and we leave the running agent alone.
+# `build-dev` always swaps the executable via rename(2) before re-signing so a
+# live process never sees its mapped code pages rewritten in place.
 dev: setup-dev-cert
 	@mkdir -p $(LOG_DIR)
-	@: "Reference file captures the stamp's mtime before build-dev runs."; \
-	: "Using touch -r + test -nt is portable across BSD and GNU coreutils,"; \
-	: "unlike stat -f %m (BSD) vs stat -c %Y (GNU) which diverge on this box."; \
-	ref=$$(mktemp -t transcribeer-stamp-ref.XXXXXX); \
-	trap 'rm -f $$ref' EXIT; \
-	if [ -f $(APP_STAMP) ]; then touch -r $(APP_STAMP) $$ref; else : > $$ref; fi; \
+	@: "Build the release binary first; this does not touch the live app bundle."; \
+	$(MAKE) --no-print-directory gui-build || exit $$?; \
+	agent_loaded=0; \
 	agent_running=0; \
-	if launchctl list $(PLIST_LABEL) >/dev/null 2>&1; then agent_running=1; fi; \
-	$(MAKE) --no-print-directory build-dev || exit $$?; \
-	if [ -f $(APP_STAMP) ] && [ ! $(APP_STAMP) -nt $$ref ] && [ $$agent_running -eq 1 ]; then \
+	if launchctl list $(PLIST_LABEL) >/dev/null 2>&1; then agent_loaded=1; fi; \
+	if [ $$agent_loaded -eq 1 ] && launchctl list $(PLIST_LABEL) 2>/dev/null | grep -q '"PID" ='; then agent_running=1; fi; \
+	needs_bundle=0; \
+	if [ ! -f $(APP_STAMP) ] || [ ! -d $(APP_BUNDLE) ] \
+		|| [ gui/.build/release/TranscribeerApp -nt $(APP_STAMP) ] \
+		|| [ gui/Info.plist -nt $(APP_STAMP) ] \
+		|| [ $(APP_ENTITLEMENTS) -nt $(APP_STAMP) ] \
+		|| { [ -f assets/logo.png ] && [ assets/logo.png -nt $(APP_STAMP) ]; }; then \
+		needs_bundle=1; \
+	fi; \
+	if [ $$needs_bundle -eq 0 ] && [ $$agent_running -eq 1 ]; then \
 		echo "✓ no rebuild needed — leaving running agent alone"; \
 		echo "  logs: $(LOG_DIR)/transcribeer.log"; \
 		exit 0; \
 	fi; \
-	if [ $$agent_running -eq 1 ]; then \
+	if [ $$needs_bundle -eq 1 ] && [ $$agent_running -eq 1 ]; then \
 		launchctl kill SIGTERM gui/$$(id -u)/$(PLIST_LABEL) 2>/dev/null || true; \
 		while launchctl list $(PLIST_LABEL) 2>/dev/null | grep -q '"PID" ='; do sleep 0.1; done; \
+	fi; \
+	if [ $$needs_bundle -eq 1 ] && [ $$agent_loaded -eq 1 ]; then \
+		launchctl bootout gui/$$(id -u)/$(PLIST_LABEL) 2>/dev/null || true; \
+		agent_loaded=0; \
+	fi; \
+	if [ $$needs_bundle -eq 1 ]; then \
+		$(MAKE) --no-print-directory build-dev || exit $$?; \
+	fi; \
+	if [ $$agent_loaded -eq 1 ]; then \
 		launchctl kickstart gui/$$(id -u)/$(PLIST_LABEL); \
-		echo "✓ transcribeer restarted (TCC preserved)"; \
+		echo "✓ transcribeer started"; \
 	else \
 		echo "$$PLIST_CONTENT" > $(PLIST_PATH); \
 		launchctl bootstrap gui/$$(id -u) $(PLIST_PATH); \
@@ -237,8 +250,11 @@ dev-uninstall:
 	@echo "✓ transcribeer dev agent removed"
 
 dev-restart:
-	@launchctl kickstart -k gui/$$(id -u)/$(PLIST_LABEL)
-	@echo "✓ transcribeer dev agent restarted"
+	@mkdir -p $(LOG_DIR)
+	@launchctl bootout gui/$$(id -u)/$(PLIST_LABEL) 2>/dev/null || true
+	@echo "$$PLIST_CONTENT" > $(PLIST_PATH)
+	@launchctl bootstrap gui/$$(id -u) $(PLIST_PATH)
+	@echo "✓ transcribeer dev agent reloaded and restarted"
 
 # start: ensure the dev agent is loaded AND its process is actually running.
 # Useful when the agent is loaded but the process was killed manually — the
@@ -257,8 +273,10 @@ start:
 	elif launchctl list $(PLIST_LABEL) 2>/dev/null | grep -q '"PID" ='; then \
 		echo "✓ transcribeer already running"; \
 	else \
-		launchctl kickstart gui/$$(id -u)/$(PLIST_LABEL); \
-		echo "✓ transcribeer started"; \
+		launchctl bootout gui/$$(id -u)/$(PLIST_LABEL) 2>/dev/null || true; \
+		echo "$$PLIST_CONTENT" > $(PLIST_PATH); \
+		launchctl bootstrap gui/$$(id -u) $(PLIST_PATH); \
+		echo "✓ transcribeer reloaded and started"; \
 	fi
 	@echo "  logs: $(LOG_DIR)/transcribeer.log"
 
@@ -298,11 +316,9 @@ build-dev: gui-build
 	: "a fresh inode. In-place cp would mutate the live inode's pages and"; \
 	: "the kernel would kill the running process with CODESIGNING / Invalid"; \
 	: "Page on the next cold code-page fault."; \
-	if ! cmp -s gui/.build/release/TranscribeerApp $(APP_MACOS)/TranscribeerApp.unsigned 2>/dev/null; then \
-		cp gui/.build/release/TranscribeerApp $(APP_MACOS)/TranscribeerApp.new; \
-		mv -f $(APP_MACOS)/TranscribeerApp.new $(APP_MACOS)/TranscribeerApp; \
-		cp gui/.build/release/TranscribeerApp $(APP_MACOS)/TranscribeerApp.unsigned; \
-	fi; \
+	cp gui/.build/release/TranscribeerApp $(APP_MACOS)/TranscribeerApp.new; \
+	mv -f $(APP_MACOS)/TranscribeerApp.new $(APP_MACOS)/TranscribeerApp; \
+	cp gui/.build/release/TranscribeerApp $(APP_MACOS)/TranscribeerApp.unsigned; \
 	cmp -s gui/Info.plist $(APP_CONTENTS)/Info.plist || \
 		cp gui/Info.plist $(APP_CONTENTS)/Info.plist; \
 	if [ -f assets/logo.png ] && [ assets/logo.png -nt $(APP_RESOURCES)/AppIcon.icns ]; then \
