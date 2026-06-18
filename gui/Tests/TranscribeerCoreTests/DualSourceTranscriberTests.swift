@@ -171,93 +171,136 @@ struct DualSourceTranscriberTests {
         #expect(TranscriptFormatter.formatDual([]).isEmpty)
     }
 
+    // MARK: - Source file selection
+
+    @Test("Compressed source sidecars trigger the dual-source path")
+    func compressedSidecarsTriggerDualPath() async throws {
+        try await dualSourceTranscriberMockLock.withLock {
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("transcribeer-compressed-sidecars-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: dir) }
+            try Data("mic".utf8).write(to: SourceAudioFiles.compressedURL(in: dir, source: .mic))
+            try Data("sys".utf8).write(to: SourceAudioFiles.compressedURL(in: dir, source: .sys))
+
+            let originalTranscribe = DualSourceTranscriber.transcribeChunkFunc
+            let originalAudible = DualSourceTranscriber.ensureAudibleFunc
+            defer {
+                DualSourceTranscriber.transcribeChunkFunc = originalTranscribe
+                DualSourceTranscriber.ensureAudibleFunc = originalAudible
+            }
+            DualSourceTranscriber.transcribeChunkFunc = { url, _, _, _, _, _, _ in
+                if url.lastPathComponent.contains("mic") {
+                    return [TranscriptSegment(start: 0, end: 1, text: "mic")]
+                }
+                return [TranscriptSegment(start: 1, end: 2, text: "sys")]
+            }
+            DualSourceTranscriber.ensureAudibleFunc = { _ in }
+
+            var cfg = AppConfig()
+            cfg.audio.selfLabel = "You"
+            cfg.audio.otherLabel = "Them"
+
+            let result = try await DualSourceTranscriber.transcribe(
+                session: dir,
+                cfg: cfg,
+                timing: .init(micStartEpoch: 0, sysStartEpoch: 0)
+            )
+
+            #expect(result.map(\.speaker) == ["You", "Them"])
+            #expect(result.map(\.text) == ["mic", "sys"])
+        }
+    }
+
     // MARK: - Diarization invocation
 
     @Test("Diarization respects the mic-multiuser config flag")
     func diarizationRespectsConfigFlag() async throws {
-        let originalDiarize = DualSourceTranscriber.diarizeFunc
-        let originalTranscribe = DualSourceTranscriber.transcribeChunkFunc
-        let originalAudible = DualSourceTranscriber.ensureAudibleFunc
-        defer {
-            DualSourceTranscriber.diarizeFunc = originalDiarize
-            DualSourceTranscriber.transcribeChunkFunc = originalTranscribe
-            DualSourceTranscriber.ensureAudibleFunc = originalAudible
-        }
-
-        DualSourceTranscriber.transcribeChunkFunc = { _, _, _, _, _, _, _ in
-            [
-                TranscriptSegment(start: 0, end: 0.4, text: "hello"),
-                TranscriptSegment(start: 0.6, end: 1, text: "world"),
-            ]
-        }
-        DualSourceTranscriber.ensureAudibleFunc = { _ in }
-
-        // 1. Disabled — diarization should not be called.
-        var wasCalled = false
-        DualSourceTranscriber.diarizeFunc = { _, _ in
-            wasCalled = true
-            return []
-        }
-        var cfg = AppConfig()
-        cfg.audio.diarizeMicMultiuser = false
-
-        _ = try await DualSourceTranscriber.transcribeDual(
-            mic: URL(fileURLWithPath: "/tmp/mic.caf"),
-            sys: nil,
-            timing: .init(micStartEpoch: 0, sysStartEpoch: nil),
-            cfg: cfg,
-            progress: .init(mic: nil, sys: nil)
-        )
-        #expect(!wasCalled)
-
-        // 2. Enabled — diarization should be called on mic only.
-        var calledURL: URL?
-        DualSourceTranscriber.diarizeFunc = { url, _ in
-            calledURL = url
-            return [
-                DiarSegment(start: 0, end: 0.5, speaker: "Speaker 1"),
-                DiarSegment(start: 0.5, end: 1, speaker: "Speaker 2"),
-            ]
-        }
-        cfg.audio.diarizeMicMultiuser = true
-        cfg.audio.selfLabel = "You"
-        cfg.audio.otherLabel = "Them"
-
-        let micURL = URL(fileURLWithPath: "/tmp/mic.caf")
-        let result = try await DualSourceTranscriber.transcribeDual(
-            mic: micURL,
-            sys: nil,
-            timing: .init(micStartEpoch: 0, sysStartEpoch: nil),
-            cfg: cfg,
-            progress: .init(mic: nil, sys: nil)
-        )
-        #expect(calledURL == micURL)
-        #expect(result.count == 2)
-        #expect(result[0].speaker == "Speaker 1")
-        #expect(result[1].speaker == "Speaker 2")
-
-        // 3. Interleave with sys — diarized mic + sys together.
-        DualSourceTranscriber.diarizeFunc = { _, _ in
-            [DiarSegment(start: 0, end: 2, speaker: "Alice")]
-        }
-        DualSourceTranscriber.transcribeChunkFunc = { url, _, _, _, _, _, _ in
-            if url.path.contains("mic") {
-                return [TranscriptSegment(start: 0, end: 2, text: "hello")]
+        try await dualSourceTranscriberMockLock.withLock {
+            let originalDiarize = DualSourceTranscriber.diarizeFunc
+            let originalTranscribe = DualSourceTranscriber.transcribeChunkFunc
+            let originalAudible = DualSourceTranscriber.ensureAudibleFunc
+            defer {
+                DualSourceTranscriber.diarizeFunc = originalDiarize
+                DualSourceTranscriber.transcribeChunkFunc = originalTranscribe
+                DualSourceTranscriber.ensureAudibleFunc = originalAudible
             }
-            return [TranscriptSegment(start: 1, end: 3, text: "hi")]
-        }
 
-        let interleaved = try await DualSourceTranscriber.transcribeDual(
-            mic: URL(fileURLWithPath: "/tmp/mic.caf"),
-            sys: URL(fileURLWithPath: "/tmp/sys.caf"),
-            timing: .init(micStartEpoch: 0, sysStartEpoch: 0),
-            cfg: cfg,
-            progress: .init(mic: nil, sys: nil)
-        )
-        #expect(interleaved.count == 2)
-        #expect(interleaved[0].speaker == "Alice")
-        #expect(interleaved[0].text == "hello")
-        #expect(interleaved[1].speaker == "Them")
-        #expect(interleaved[1].text == "hi")
+            DualSourceTranscriber.transcribeChunkFunc = { _, _, _, _, _, _, _ in
+                [
+                    TranscriptSegment(start: 0, end: 0.4, text: "hello"),
+                    TranscriptSegment(start: 0.6, end: 1, text: "world"),
+                ]
+            }
+            DualSourceTranscriber.ensureAudibleFunc = { _ in }
+
+            // 1. Disabled — diarization should not be called.
+            var wasCalled = false
+            DualSourceTranscriber.diarizeFunc = { _, _ in
+                wasCalled = true
+                return []
+            }
+            var cfg = AppConfig()
+            cfg.audio.diarizeMicMultiuser = false
+
+            _ = try await DualSourceTranscriber.transcribeDual(
+                mic: URL(fileURLWithPath: "/tmp/mic.caf"),
+                sys: nil,
+                timing: .init(micStartEpoch: 0, sysStartEpoch: nil),
+                cfg: cfg,
+                progress: .init(mic: nil, sys: nil)
+            )
+            #expect(wasCalled == false)
+
+            // 2. Enabled — diarization should be called on mic only.
+            var calledURL: URL?
+            DualSourceTranscriber.diarizeFunc = { url, _ in
+                calledURL = url
+                return [
+                    DiarSegment(start: 0, end: 0.5, speaker: "Speaker 1"),
+                    DiarSegment(start: 0.5, end: 1, speaker: "Speaker 2"),
+                ]
+            }
+            cfg.audio.diarizeMicMultiuser = true
+            cfg.audio.selfLabel = "You"
+            cfg.audio.otherLabel = "Them"
+
+            let micURL = URL(fileURLWithPath: "/tmp/mic.caf")
+            let result = try await DualSourceTranscriber.transcribeDual(
+                mic: micURL,
+                sys: nil,
+                timing: .init(micStartEpoch: 0, sysStartEpoch: nil),
+                cfg: cfg,
+                progress: .init(mic: nil, sys: nil)
+            )
+            #expect(calledURL == micURL)
+            #expect(result.count == 2)
+            #expect(result[0].speaker == "Speaker 1")
+            #expect(result[1].speaker == "Speaker 2")
+
+            // 3. Interleave with sys — diarized mic + sys together.
+            DualSourceTranscriber.diarizeFunc = { _, _ in
+                [DiarSegment(start: 0, end: 2, speaker: "Alice")]
+            }
+            DualSourceTranscriber.transcribeChunkFunc = { url, _, _, _, _, _, _ in
+                if url.path.contains("mic") {
+                    return [TranscriptSegment(start: 0, end: 2, text: "hello")]
+                }
+                return [TranscriptSegment(start: 1, end: 3, text: "hi")]
+            }
+
+            let interleaved = try await DualSourceTranscriber.transcribeDual(
+                mic: URL(fileURLWithPath: "/tmp/mic.caf"),
+                sys: URL(fileURLWithPath: "/tmp/sys.caf"),
+                timing: .init(micStartEpoch: 0, sysStartEpoch: 0),
+                cfg: cfg,
+                progress: .init(mic: nil, sys: nil)
+            )
+            #expect(interleaved.count == 2)
+            #expect(interleaved[0].speaker == "Alice")
+            #expect(interleaved[0].text == "hello")
+            #expect(interleaved[1].speaker == "Them")
+            #expect(interleaved[1].text == "hi")
+        }
     }
 }

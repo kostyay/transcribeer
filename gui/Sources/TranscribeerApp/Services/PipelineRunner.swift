@@ -257,7 +257,7 @@ final class PipelineRunner {
         }
 
         if config.pipelineMode == "record-only" {
-            finishSession(session)
+            await finishSession(session, config: config)
             return
         }
 
@@ -270,7 +270,7 @@ final class PipelineRunner {
         ) else { return }
 
         if config.pipelineMode == "record+transcribe" {
-            finishSession(session)
+            await finishSession(session, config: config)
             return
         }
 
@@ -282,7 +282,7 @@ final class PipelineRunner {
             logger: logger
         )
 
-        finishSession(session)
+        await finishSession(session, config: config)
     }
 
     /// Log a failure message, flip state to `.error`, and post a user notification.
@@ -408,10 +408,34 @@ final class PipelineRunner {
         return accumulated
     }
 
-    private func finishSession(_ session: URL) {
+    private func finishSession(_ session: URL, config: AppConfig) async {
         stopParticipantsCapture()
+        let logger = SessionLogger(logPath: session.appendingPathComponent("run.log"))
+        let compression = await SourceSidecarCompressor.compressSession(
+            in: session,
+            ffmpegPath: config.audio.ffmpegPath
+        )
+        logSidecarCompression(compression, logger: logger)
+
+        let cleanup = SessionManager.removeCaptureAudioSidecars(in: session)
+        if cleanup.bytesFreed > 0 {
+            logger.log("removed raw capture sidecars \(cleanup.bytesFreed) bytes")
+        }
         state = .done(sessionPath: session.path)
         NotificationManager.notifyDone(sessionName: SessionManager.displayName(session))
+    }
+
+    private func logSidecarCompression(
+        _ report: SourceSidecarCompressor.Report,
+        logger: SessionLogger
+    ) {
+        if report.compressedCount > 0 {
+            let methods = report.methods.joined(separator: ",")
+            logger.log("compressed source sidecars count=\(report.compressedCount) methods=\(methods)")
+        }
+        for failure in report.failed {
+            logger.log("source sidecar compression failed: \(failure)")
+        }
     }
 }
 
@@ -603,7 +627,7 @@ extension PipelineRunner {
         let trimmedFocus = focus?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let trimmedFocus, !trimmedFocus.isEmpty {
             let root = base ?? SummarizationService.defaultPrompt
-            return root + "\n\nAdditional instructions from the user:\n" + trimmedFocus
+            return "\(root)\n\nAdditional instructions from the user:\n\(trimmedFocus)"
         }
         return base
     }

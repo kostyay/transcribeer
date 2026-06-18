@@ -27,7 +27,7 @@ public enum DualSourceTranscriber {
 
     /// Transcribe a session directory.
     ///
-    /// - If `audio.mic.caf` or `audio.sys.caf` exists, runs the dual path.
+    /// - If raw or compressed per-source sidecars exist, runs the dual path.
     /// - Otherwise falls back to `audio.m4a` legacy transcription.
     public static func transcribe(
         session: URL,
@@ -36,16 +36,13 @@ public enum DualSourceTranscriber {
         onMicProgress: (@Sendable (Double) -> Void)? = nil,
         onSysProgress: (@Sendable (Double) -> Void)? = nil
     ) async throws -> [LabeledSegment] {
-        let micURL = session.appendingPathComponent("audio.mic.caf")
-        let sysURL = session.appendingPathComponent("audio.sys.caf")
+        let micURL = SourceAudioFiles.preferredURL(in: session, source: .mic)
+        let sysURL = SourceAudioFiles.preferredURL(in: session, source: .sys)
 
-        let hasMic = FileManager.default.fileExists(atPath: micURL.path)
-        let hasSys = FileManager.default.fileExists(atPath: sysURL.path)
-
-        if hasMic || hasSys {
+        if micURL != nil || sysURL != nil {
             return try await transcribeDual(
-                mic: hasMic ? micURL : nil,
-                sys: hasSys ? sysURL : nil,
+                mic: micURL,
+                sys: sysURL,
                 timing: timing,
                 cfg: cfg,
                 progress: .init(mic: onMicProgress, sys: onSysProgress)
@@ -185,19 +182,16 @@ public enum DualSourceTranscriber {
             )
         }
 
-        let sessionStart = min(timing.micStartEpoch ?? 0, timing.sysStartEpoch ?? 0)
-        let micOffset = (timing.micStartEpoch ?? 0) - sessionStart
-        let sysOffset = (timing.sysStartEpoch ?? 0) - sessionStart
-
+        let offsets = timelineOffsets(timing)
         let micLabeled = try await labelMicSegments(
             micSegments: micSegments,
             micURL: mic,
-            offset: micOffset,
+            offset: offsets.mic,
             cfg: cfg
         )
         let sysLabeled = labelSysSegments(
             sysSegments: sysSegments,
-            offset: sysOffset,
+            offset: offsets.sys,
             otherLabel: cfg.audio.otherLabel
         )
 
@@ -283,18 +277,23 @@ public enum DualSourceTranscriber {
         selfLabel: String,
         otherLabel: String
     ) -> [LabeledSegment] {
-        let sessionStart = min(timing.micStartEpoch ?? 0, timing.sysStartEpoch ?? 0)
-        let micOffset = (timing.micStartEpoch ?? 0) - sessionStart
-        let sysOffset = (timing.sysStartEpoch ?? 0) - sessionStart
-
-        let mic = (micSegments ?? []).map { shifted($0, offset: micOffset, speaker: selfLabel) }
-        let sys = (sysSegments ?? []).map { shifted($0, offset: sysOffset, speaker: otherLabel) }
+        let offsets = timelineOffsets(timing)
+        let mic = (micSegments ?? []).map { shifted($0, offset: offsets.mic, speaker: selfLabel) }
+        let sys = (sysSegments ?? []).map { shifted($0, offset: offsets.sys, speaker: otherLabel) }
 
         // Stable interleave: earlier start wins; on ties, mic (self) comes first.
         return (mic + sys).sorted { a, b in
             if a.start != b.start { return a.start < b.start }
             return a.speaker == selfLabel && b.speaker != selfLabel
         }
+    }
+
+    private static func timelineOffsets(_ timing: TimingInfo) -> (mic: Double, sys: Double) {
+        let sessionStart = min(timing.micStartEpoch ?? 0, timing.sysStartEpoch ?? 0)
+        return (
+            mic: (timing.micStartEpoch ?? 0) - sessionStart,
+            sys: (timing.sysStartEpoch ?? 0) - sessionStart
+        )
     }
 
     // MARK: - Legacy mixed

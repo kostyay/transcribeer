@@ -21,6 +21,7 @@ struct AppConfigTests {
         #expect(cfg.pipelineMode == "record+transcribe+summarize")
         #expect(!cfg.meetingAutoRecord)
         #expect(cfg.promptOnStop)
+        #expect(cfg.audio.ffmpegPath.isEmpty)
     }
 
     @Test("Transcription backend + cloud models round-trip via TOMLDecoder")
@@ -87,16 +88,10 @@ struct AppConfigTests {
         cfg.audio.aec = false
         cfg.audio.selfLabel = "Alice"
         cfg.audio.otherLabel = "Bob"
+        cfg.audio.ffmpegPath = "/opt/homebrew/bin/ffmpeg"
         cfg.audio.diarizeMicMultiuser = true
 
-        let tmpDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-        let path = tmpDir.appendingPathComponent("config.toml")
-
-        defer { try? FileManager.default.removeItem(at: tmpDir) }
-
-        // Use reflection or direct write since ConfigManager.configPath is static
+        // Decode directly since ConfigManager.configPath is fixed to the user's home directory.
         let lines = """
         [pipeline]
         mode = "\(cfg.pipelineMode)"
@@ -125,18 +120,16 @@ struct AppConfigTests {
         aec = \(cfg.audio.aec)
         self_label = "\(cfg.audio.selfLabel)"
         other_label = "\(cfg.audio.otherLabel)"
+        ffmpeg_path = "\(cfg.audio.ffmpegPath)"
         diarize_mic_multiuser = \(cfg.audio.diarizeMicMultiuser)
         """
-        try lines.write(to: path, atomically: true, encoding: .utf8)
-
-        // Load via TOMLDecoder directly to verify round-trip
-        let data = try Data(contentsOf: path)
-        let decoded = try TOMLDecoder().decode(TOMLFile.self, from: data)
+        let decoded = try TOMLDecoder().decode(TOMLFile.self, from: Data(lines.utf8))
         #expect(decoded.audio?.input_device_uid == "MyMic-UID")
         #expect(decoded.audio?.output_device_uid == "MyOut-UID")
         #expect(decoded.audio?.aec == false)
         #expect(decoded.audio?.self_label == "Alice")
         #expect(decoded.audio?.other_label == "Bob")
+        #expect(decoded.audio?.ffmpeg_path == "/opt/homebrew/bin/ffmpeg")
         #expect(decoded.audio?.diarize_mic_multiuser == true)
     }
 

@@ -8,10 +8,9 @@ import os
 /// start at zero.
 ///
 /// Only the mixed audio file (`audio.m4a` / `audio.wav`) is split. Dual-source
-/// artifacts (`audio.mic.caf`, `audio.sys.caf`, `timing.json`) are removed
-/// from both sides so any future re-transcribe falls back to the legacy
-/// mixed-audio path and can't reach beyond the split boundary via the
-/// original CAF files.
+/// artifacts (`audio.mic.*`, `audio.sys.*`, `timing.json`) are removed from
+/// both sides so any future re-transcribe falls back to the legacy mixed-audio
+/// path and can't reach beyond the split boundary via original source files.
 enum SessionSplitter {
     // MARK: - Errors
 
@@ -192,11 +191,11 @@ enum SessionSplitter {
     }
 
     private static func writeOrRemove(text: String, at url: URL) {
-        if text.isEmpty {
+        guard !text.isEmpty else {
             try? FileManager.default.removeItem(at: url)
-        } else {
-            try? text.write(to: url, atomically: true, encoding: .utf8)
+            return
         }
+        try? text.write(to: url, atomically: true, encoding: .utf8)
     }
 
     // MARK: - Metadata
@@ -269,13 +268,16 @@ enum SessionSplitter {
     // MARK: - Filesystem helpers
 
     private static func removeDualSourceArtifacts(in dir: URL) {
-        let names = ["audio.mic.caf", "audio.sys.caf", "timing.json"]
+        let names = [
+            "audio.mic.caf",
+            "audio.sys.caf",
+            "audio.mic.m4a",
+            "audio.sys.m4a",
+            "timing.json",
+        ]
         let fm = FileManager.default
-        for name in names {
-            let url = dir.appendingPathComponent(name)
-            if fm.fileExists(atPath: url.path) {
-                try? fm.removeItem(at: url)
-            }
+        for url in names.map({ dir.appendingPathComponent($0) }) where fm.fileExists(atPath: url.path) {
+            try? fm.removeItem(at: url)
         }
     }
 
