@@ -149,6 +149,12 @@ struct SessionDetail {
     /// associated, the participants panel stayed closed, or the meeting
     /// exceeded the `maxMeetingParticipants` threshold.
     let participants: [SessionParticipant]
+    /// Token / cost / model metadata for the most recent transcription,
+    /// `nil` for sessions transcribed before metadata capture landed.
+    let transcriptionUsage: PipelineUsage?
+    /// Token / cost / model metadata for the most recent summary, `nil`
+    /// for sessions summarized before metadata capture landed.
+    let summarizationUsage: PipelineUsage?
 }
 
 // MARK: - Session Manager
@@ -247,6 +253,10 @@ enum SessionManager {
             audioURL: audio,
             language: meta["language"] as? String,
             participants: decodeParticipants(meta["participants"]),
+            transcriptionUsage: (meta["transcription_meta"] as? [String: Any])
+                .flatMap(PipelineUsage.init(dict:)),
+            summarizationUsage: (meta["summarization_meta"] as? [String: Any])
+                .flatMap(PipelineUsage.init(dict:)),
         )
     }
 
@@ -372,6 +382,30 @@ enum SessionManager {
         writeMeta(dir, data)
     }
 
+    /// Persist the per-summary token/cost record under `summarization_meta`.
+    static func setSummarizationUsage(_ dir: URL, _ usage: PipelineUsage) {
+        setUsage(dir, key: "summarization_meta", usage: usage)
+    }
+
+    /// Persist the per-transcription token/cost record under
+    /// `transcription_meta`.
+    static func setTranscriptionUsage(_ dir: URL, _ usage: PipelineUsage) {
+        setUsage(dir, key: "transcription_meta", usage: usage)
+    }
+
+    /// Read either usage record. `nil` when the key isn't present or the
+    /// stored shape doesn't match (legacy sessions, hand-edited json, etc.).
+    static func readUsage(_ dir: URL, key: String) -> PipelineUsage? {
+        guard let dict = readMeta(dir)[key] as? [String: Any] else { return nil }
+        return PipelineUsage(dict: dict)
+    }
+
+    private static func setUsage(_ dir: URL, key: String, usage: PipelineUsage) {
+        var data = readMeta(dir)
+        data[key] = usage.dict()
+        writeMeta(dir, data)
+    }
+
     static func displayName(_ dir: URL) -> String {
         let name = readMeta(dir)["name"] as? String ?? ""
         return name.isEmpty ? dir.lastPathComponent : name
@@ -489,25 +523,39 @@ enum SessionManager {
 
     /// Audio duration using AVAudioFile — works for any Core Audio format.
     private static func audioDuration(_ dir: URL) -> String {
-        guard let url = audioURL(in: dir),
-              let file = try? AVAudioFile(forReading: url) else { return "—" }
-        let seconds = Int(Double(file.length) / file.fileFormat.sampleRate)
-        let m = seconds / 60
-        let s = seconds % 60
-        return String(format: "%d:%02d", m, s)
+        guard let seconds = audioDurationSeconds(in: dir) else { return "—" }
+        let total = Int(seconds)
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
 
+    /// Audio length in seconds, or `nil` when there's no recorded audio /
+    /// the file can't be opened. Exposed so the pricing layer can compute
+    /// per-minute cost without re-deriving the path itself.
+    static func audioDurationSeconds(in dir: URL) -> Double? {
+        guard let url = audioURL(in: dir),
+              let file = try? AVAudioFile(forReading: url)
+        else { return nil }
+        let sampleRate = file.fileFormat.sampleRate
+        guard sampleRate > 0 else { return nil }
+        return Double(file.length) / sampleRate
+    }
+
+    /// Sidebar one-liner. Prefers the LLM-authored `description.txt`, then
+    /// the summary (skipping bare markdown headings so legacy sessions show
+    /// real content), then the transcript.
     private static func snippet(_ dir: URL) -> String {
-        let summaryPath = dir.appendingPathComponent("summary.md")
-        if let text = try? String(contentsOf: summaryPath, encoding: .utf8),
-           let first = firstNonEmptyLine(text) {
-            return String(first.prefix(120))
+        if let text = readFile("description.txt", in: dir),
+           let line = firstNonEmptyLine(text) {
+            return String(line.prefix(120))
         }
-        let transcriptPath = dir.appendingPathComponent("transcript.txt")
-        if let text = try? String(contentsOf: transcriptPath, encoding: .utf8) {
+        if let text = readFile("summary.md", in: dir),
+           let line = firstNonHeadingLine(text) {
+            return String(line.prefix(120))
+        }
+        if let text = readFile("transcript.txt", in: dir) {
             // Prefer the parsed shape so special tokens and `[MM:SS]` headers
-            // don't leak into the sidebar. Fall back to sanitized raw text for
-            // transcripts that don't match the speaker-line format.
+            // don't leak into the sidebar. Fall back to sanitized raw text
+            // for transcripts that don't match the speaker-line format.
             if let firstLine = TranscriptFormatter.parse(text).first, !firstLine.text.isEmpty {
                 return String(firstLine.text.prefix(120))
             }
@@ -518,10 +566,26 @@ enum SessionManager {
         return ""
     }
 
+    private static func readFile(_ name: String, in dir: URL) -> String? {
+        try? String(contentsOf: dir.appendingPathComponent(name), encoding: .utf8)
+    }
+
     private static func firstNonEmptyLine(_ text: String) -> String? {
         text.components(separatedBy: .newlines)
             .lazy
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .first { !$0.isEmpty }
+    }
+
+    /// First non-empty, non-markdown-heading line. Falls back to the first
+    /// non-empty line if every line is a heading, so we never return an
+    /// empty snippet for a non-empty file.
+    private static func firstNonHeadingLine(_ text: String) -> String? {
+        let lines = text
+            .components(separatedBy: .newlines)
+            .lazy
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        return lines.first { !$0.hasPrefix("#") } ?? lines.first
     }
 }

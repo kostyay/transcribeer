@@ -104,21 +104,20 @@ public final class MicCapture: @unchecked Sendable {
                 continuation: continuation
             ) else { return }
 
-            let format = inputNode.outputFormat(forBus: 0)
-            let sampleRate = Self.resolveSampleRate(format: format, deviceID: resolvedDeviceID)
+            let nodeFormat = inputNode.outputFormat(forBus: 0)
+            Self.logSampleRateMismatch(format: nodeFormat, deviceID: resolvedDeviceID)
 
-            guard sampleRate > 0 && format.channelCount > 0 else {
-                let msg = "Invalid audio format: sr=\(sampleRate) ch=\(format.channelCount)"
+            guard nodeFormat.sampleRate > 0 && nodeFormat.channelCount > 0 else {
+                let msg = "Invalid audio format: sr=\(nodeFormat.sampleRate) ch=\(nodeFormat.channelCount)"
                 logger.error("\(msg, privacy: .public)")
                 errorHolder.value = msg
                 continuation.finish()
                 return
             }
 
-            let tapFormat = Self.pickTapFormat(nodeFormat: format, preferredRate: sampleRate)
-            logger.info(
-                "tapFormat: sr=\(tapFormat.sampleRate, privacy: .public) ch=\(tapFormat.channelCount, privacy: .public)"
-            )
+            let tapFormat = Self.tapFormatForInstallation(nodeFormat: nodeFormat)
+            let tapDescription = Self.tapFormatDescription(nodeFormat: nodeFormat, tapFormat: tapFormat)
+            logger.info("\(tapDescription, privacy: .public)")
 
             self.installTap(inputNode: inputNode, tapFormat: tapFormat, continuation: continuation)
 
@@ -182,53 +181,42 @@ public final class MicCapture: @unchecked Sendable {
         return .some(id)
     }
 
-    /// Prefer the hardware-reported nominal rate over the AVAudioEngine's
-    /// inputNode format, which can lag behind a device switch (e.g. swapping
-    /// to a 48 kHz USB mic while the node still reports 44.1 kHz).
-    private static func resolveSampleRate(
-        format: AVAudioFormat,
-        deviceID: AudioDeviceID?
-    ) -> Double {
+    /// Log a hardware/node rate mismatch, but do not pass the hardware rate to
+    /// `installTap`. AVAudioEngine validates taps against the node format and
+    /// raises an Objective-C exception (not a Swift error) on mismatch.
+    private static func logSampleRateMismatch(format: AVAudioFormat, deviceID: AudioDeviceID?) {
         let declared = format.sampleRate
         guard let devID = deviceID,
               let hwRate = Self.deviceNominalSampleRate(for: devID),
-              hwRate > 0, hwRate != declared else { return declared }
-        logger.info(
-            "Hardware sr=\(hwRate, privacy: .public) differs from inputNode sr=\(declared, privacy: .public), using hardware rate"
-        )
-        return hwRate
+              hwRate > 0,
+              hwRate != declared else { return }
+        let message = "Hardware sr=\(hwRate) differs from inputNode sr=\(declared); using native tap format"
+        logger.info("\(message, privacy: .public)")
     }
 
-    /// Some devices report formats that don't round-trip through
-    /// `AVAudioFormat(standardFormatWithSampleRate:)`; fall back through the
-    /// node rate and native format so capture always gets a tap.
-    private static func pickTapFormat(
+    /// Let AVAudioEngine choose the exact node format for tap installation.
+    /// Passing a constructed 48 kHz format to a 44.1 kHz node can terminate the
+    /// process with `Failed to create tap due to format mismatch`.
+    @_spi(Testing)
+    public static func tapFormatForInstallation(nodeFormat _: AVAudioFormat) -> AVAudioFormat? {
+        nil
+    }
+
+    /// Human-readable tap format choice for diagnostics and tests.
+    @_spi(Testing)
+    public static func tapFormatDescription(
         nodeFormat: AVAudioFormat,
-        preferredRate: Double
-    ) -> AVAudioFormat {
-        if let fmt = AVAudioFormat(
-            standardFormatWithSampleRate: preferredRate,
-            channels: nodeFormat.channelCount
-        ) {
-            return fmt
+        tapFormat: AVAudioFormat?
+    ) -> String {
+        guard let tapFormat else {
+            return "tapFormat: native sr=\(nodeFormat.sampleRate) ch=\(nodeFormat.channelCount)"
         }
-        if preferredRate != nodeFormat.sampleRate,
-           let fmt = AVAudioFormat(
-               standardFormatWithSampleRate: nodeFormat.sampleRate,
-               channels: nodeFormat.channelCount
-           ) {
-            logger.info(
-                "Hardware-rate format failed, using node rate \(nodeFormat.sampleRate, privacy: .public)"
-            )
-            return fmt
-        }
-        logger.info("Standard formats failed, using native input format")
-        return nodeFormat
+        return "tapFormat: sr=\(tapFormat.sampleRate) ch=\(tapFormat.channelCount)"
     }
 
     private func installTap(
         inputNode: AVAudioInputNode,
-        tapFormat: AVAudioFormat,
+        tapFormat: AVAudioFormat?,
         continuation: AsyncStream<AVAudioPCMBuffer>.Continuation
     ) {
         let muted = _muted
@@ -241,9 +229,8 @@ public final class MicCapture: @unchecked Sendable {
             let rms = Self.normalizedRMS(from: buffer)
             level.value = min(rms * 25, 1.0)
             if count <= 5 || count.isMultiple(of: 100) {
-                logger.debug(
-                    "tap #\(count, privacy: .public): frames=\(buffer.frameLength, privacy: .public) rms=\(rms, privacy: .public) level=\(level.value, privacy: .public)"
-                )
+                let message = "tap #\(count): frames=\(buffer.frameLength) rms=\(rms) level=\(level.value)"
+                logger.debug("\(message, privacy: .public)")
             }
             guard !muted.value else { return }
             continuation.yield(buffer)

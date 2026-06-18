@@ -17,17 +17,48 @@ struct AudioValidationTests {
         let sampleCount = Int(durationSec * Double(sampleRate))
         var pcm = Data(count: sampleCount * 2)
         if amplitude > 0 {
-            let peakInt = Float(Int16.max)
             pcm.withUnsafeMutableBytes { buf in
                 guard let ptr = buf.bindMemory(to: Int16.self).baseAddress else { return }
                 for i in 0..<sampleCount {
-                    let t = Float(i) / Float(sampleRate)
-                    let v = amplitude * peakInt * sinf(2 * .pi * 220 * t)
-                    ptr[i] = Int16(v.rounded())
+                    ptr[i] = sineSample(index: i, sampleRate: sampleRate, amplitude: amplitude)
                 }
             }
         }
 
+        return makeWAVHeader(pcm: pcm, sampleRate: sampleRate) + pcm
+    }
+
+    private static func makeDelayedWAV(
+        audibleStartSec: Double,
+        audibleDurationSec: Double,
+        totalDurationSec: Double,
+        amplitude: Float = 0.3,
+        sampleRate: UInt32 = 16000
+    ) -> Data {
+        let sampleCount = Int(totalDurationSec * Double(sampleRate))
+        let audibleStart = Int(audibleStartSec * Double(sampleRate))
+        let audibleEnd = min(
+            sampleCount,
+            audibleStart + Int(audibleDurationSec * Double(sampleRate))
+        )
+        var pcm = Data(count: sampleCount * 2)
+        pcm.withUnsafeMutableBytes { buf in
+            guard let ptr = buf.bindMemory(to: Int16.self).baseAddress else { return }
+            for i in audibleStart..<audibleEnd {
+                ptr[i] = sineSample(index: i - audibleStart, sampleRate: sampleRate, amplitude: amplitude)
+            }
+        }
+        return makeWAVHeader(pcm: pcm, sampleRate: sampleRate) + pcm
+    }
+
+    private static func sineSample(index: Int, sampleRate: UInt32, amplitude: Float) -> Int16 {
+        let peakInt = Float(Int16.max)
+        let time = Float(index) / Float(sampleRate)
+        let value = amplitude * peakInt * sinf(2 * .pi * 220 * time)
+        return Int16(value.rounded())
+    }
+
+    private static func makeWAVHeader(pcm: Data, sampleRate: UInt32) -> Data {
         var h = Data(count: 44)
         func w32(_ off: Int, _ v: UInt32) {
             var le = v.littleEndian
@@ -50,7 +81,7 @@ struct AudioValidationTests {
         w16(34, 16)               // BitsPerSample
         h[36...39] = Data([0x64, 0x61, 0x74, 0x61]) // data
         w32(40, UInt32(pcm.count))
-        return h + pcm
+        return h
     }
 
     private static func writeTemp(_ data: Data) throws -> URL {
@@ -90,6 +121,17 @@ struct AudioValidationTests {
         let url = try Self.writeTemp(Data(repeating: 0x7f, count: 10))
         defer { try? FileManager.default.removeItem(at: url) }
         #expect(AudioValidation.hasAudibleSignal(at: url) == true)
+    }
+
+    @Test("Audio after the first probe window still counts as audible")
+    func delayedAudioCountsAsAudible() throws {
+        let url = try Self.writeTemp(Self.makeDelayedWAV(
+            audibleStartSec: 35,
+            audibleDurationSec: 5,
+            totalDurationSec: 70
+        ))
+        defer { try? FileManager.default.removeItem(at: url) }
+        #expect(AudioValidation.hasAudibleSignal(at: url, probeSeconds: 30) == true)
     }
 
     // MARK: - ensureAudibleSignal throw-helper

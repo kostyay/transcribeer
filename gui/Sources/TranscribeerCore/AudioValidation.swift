@@ -13,12 +13,12 @@ public enum AudioValidation {
     /// whispered (~-50 dBFS) and distant-mic (~-40 dBFS) recordings.
     public static let defaultPeakThreshold: Float = 0.001
 
-    /// Only probe the start of the file. 30 s is enough to detect the "capture
-    /// never produced any signal" case without scanning multi-hour recordings.
+    /// Size of each scan window. 30 s keeps memory bounded while still
+    /// detecting delayed audio without materializing multi-hour recordings.
     public static let defaultProbeSeconds: Double = 30.0
 
-    /// Returns `true` iff the first `probeSeconds` of the file reach a peak
-    /// absolute amplitude of at least `peakThreshold`.
+    /// Returns `true` iff any scanned window reaches a peak absolute
+    /// amplitude of at least `peakThreshold`.
     ///
     /// Conservative fallback: any I/O or allocation failure returns `true` so
     /// the real decoder downstream can surface the actual format/permission
@@ -35,37 +35,48 @@ public enum AudioValidation {
 
         let sampleRate = file.processingFormat.sampleRate
         let requestedFrames = Int64(probeSeconds * sampleRate)
-        let maxFrames = AVAudioFrameCount(min(requestedFrames, file.length))
-        guard maxFrames > 0 else { return false }
+        let framesPerWindow = AVAudioFrameCount(min(max(requestedFrames, 1), file.length))
+        guard framesPerWindow > 0 else { return false }
 
         guard let buffer = AVAudioPCMBuffer(
             pcmFormat: file.processingFormat,
-            frameCapacity: maxFrames
+            frameCapacity: framesPerWindow
         ) else {
             return true
         }
 
-        do {
-            try file.read(into: buffer, frameCount: maxFrames)
-        } catch {
-            return true
+        while file.framePosition < file.length {
+            buffer.frameLength = 0
+            let remaining = file.length - file.framePosition
+            let framesToRead = AVAudioFrameCount(min(Int64(framesPerWindow), remaining))
+            do {
+                try file.read(into: buffer, frameCount: framesToRead)
+            } catch {
+                return true
+            }
+            guard buffer.frameLength > 0 else { break }
+            if bufferHasAudiblePeak(buffer, peakThreshold: peakThreshold) { return true }
         }
+        return false
+    }
 
+    private static func bufferHasAudiblePeak(
+        _ buffer: AVAudioPCMBuffer,
+        peakThreshold: Float
+    ) -> Bool {
         guard let channels = buffer.floatChannelData, buffer.frameLength > 0 else {
             return false
         }
 
         let frames = Int(buffer.frameLength)
         let channelCount = Int(buffer.format.channelCount)
-        var peak: Float = 0
-        for ch in 0..<channelCount {
-            let samples = channels[ch]
-            for i in 0..<frames {
-                let value = abs(samples[i])
-                if value > peak { peak = value }
+        for channelIndex in 0..<channelCount {
+            let samples = channels[channelIndex]
+            for frameIndex in 0..<frames where abs(samples[frameIndex]) >= peakThreshold {
+                return true
             }
         }
-        return peak >= peakThreshold
+        return false
     }
 
     /// Throws `AudioValidationError.silent` if `hasAudibleSignal` returns
@@ -77,12 +88,11 @@ public enum AudioValidation {
         peakThreshold: Float = defaultPeakThreshold,
         probeSeconds: Double = defaultProbeSeconds
     ) throws {
-        let audible = hasAudibleSignal(
+        guard hasAudibleSignal(
             at: url,
             peakThreshold: peakThreshold,
             probeSeconds: probeSeconds
-        )
-        if !audible {
+        ) else {
             throw AudioValidationError.silent(url: url, probeSeconds: probeSeconds)
         }
     }
@@ -98,8 +108,8 @@ public enum AudioValidationError: LocalizedError {
         case let .silent(url, probeSeconds):
             let seconds = Int(probeSeconds.rounded())
             return """
-                Recording appears silent (no audible signal in first \(seconds) seconds \
-                of \(url.lastPathComponent)). Common causes:
+                Recording appears silent (no audible signal found while scanning \
+                \(seconds) seconds at a time in \(url.lastPathComponent)). Common causes:
                   • System-audio capture with nothing playing through speakers.
                   • System Audio Recording permission revoked mid-session.
                   • Microphone input muted or wrong device selected.

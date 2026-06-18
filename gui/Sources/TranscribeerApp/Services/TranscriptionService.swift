@@ -289,12 +289,12 @@ final class TranscriptionService {
         timing: DualSourceTranscriber.TimingInfo,
         backend: TranscriptionBackend
     ) async throws -> String {
-        let micURL = session.appendingPathComponent("audio.mic.caf")
-        let sysURL = session.appendingPathComponent("audio.sys.caf")
+        let micURL = SourceAudioFiles.preferredURL(in: session, source: .mic)
+        let sysURL = SourceAudioFiles.preferredURL(in: session, source: .sys)
         let mixedURL = session.appendingPathComponent("audio.m4a")
         let fileManager = FileManager.default
-        let hasMic = fileManager.fileExists(atPath: micURL.path)
-        let hasSys = fileManager.fileExists(atPath: sysURL.path)
+        let hasMic = micURL != nil
+        let hasSys = sysURL != nil
         let hasMixed = fileManager.fileExists(atPath: mixedURL.path)
 
         let model = backend == .openai
@@ -317,8 +317,8 @@ final class TranscriptionService {
         }
         let dualCfg = CloudTranscriptionCoordinator.DualConfig(
             backend: backend,
-            micURL: hasMic ? micURL : nil,
-            sysURL: hasSys ? sysURL : nil,
+            micURL: micURL,
+            sysURL: sysURL,
             timing: timing,
             model: model,
             language: config.language,
@@ -401,10 +401,14 @@ final class TranscriptionService {
 
     private func updateCombinedProgress() {
         switch (micProgress, sysProgress) {
-        case (nil, nil):                   progress = nil
-        case let (mic?, nil):              progress = mic
-        case let (nil, sys?):              progress = sys
-        case let (mic?, sys?):             progress = (mic + sys) / 2
+        case (nil, nil):
+            progress = nil
+        case let (mic?, nil):
+            progress = mic
+        case let (nil, sys?):
+            progress = sys
+        case let (mic?, sys?):
+            progress = (mic + sys) / 2
         }
     }
 
@@ -560,9 +564,11 @@ private final class ProgressSink: @unchecked Sendable {
 
     func submit(_ value: Double) {
         let shouldEmit = lock.withLock {
-            let crossedThreshold = value == 1.0 || value == 0 || value - lastValue >= Self.threshold
-            if crossedThreshold { lastValue = value }
-            return crossedThreshold
+            let isBoundary = value == 0 || value == 1.0
+            let crossedThreshold = value - lastValue >= Self.threshold
+            let shouldEmit = isBoundary || crossedThreshold
+            if shouldEmit { lastValue = value }
+            return shouldEmit
         }
         if shouldEmit { emit(value) }
     }

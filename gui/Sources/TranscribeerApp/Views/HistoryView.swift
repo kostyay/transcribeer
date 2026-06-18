@@ -424,7 +424,11 @@ struct HistoryView: View {
             ForEach(groupedSessions, id: \.title) { group in
                 Section(group.title) {
                     ForEach(group.sessions) { session in
-                        SessionRow(session: session)
+                        SessionRow(
+                            session: session,
+                            isTranscribing: runner.transcribingSession == session.path,
+                            isSummarizing: runner.summarizingSession == session.path,
+                        )
                             .tag(session.id)
                             .contextMenu { contextMenuItems(for: session) }
                     }

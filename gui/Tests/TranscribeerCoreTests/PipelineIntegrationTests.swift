@@ -26,12 +26,8 @@ struct PipelineIntegrationTests {
 
         // 1. Record: feed synthetic PCM buffers through DualAudioRecorder.
         let recorder = DualAudioRecorder(sessionDir: sessionDir)
-        let micSamples = (0..<48_000).map { i in
-            Float(sin(2.0 * .pi * 440 * Double(i) / 48_000)) * 0.4
-        }
-        let sysSamples = (0..<48_000).map { i in
-            Float(sin(2.0 * .pi * 880 * Double(i) / 48_000)) * 0.4
-        }
+        let micSamples = sineSamples(frequency: 440, count: 48_000, amplitude: 0.4)
+        let sysSamples = sineSamples(frequency: 880, count: 48_000, amplitude: 0.4)
         try recorder.writeMic(makeBuffer(samples: micSamples, sampleRate: 48_000))
         try recorder.writeSys(makeBuffer(samples: sysSamples, sampleRate: 48_000))
 
@@ -61,46 +57,48 @@ struct PipelineIntegrationTests {
         #expect(FileManager.default.fileExists(atPath: timingURL.path))
         #expect(FileManager.default.fileExists(atPath: outputURL.path))
 
-        // 4. Transcribe via DualSourceTranscriber with mocked ML backends.
-        let (micSegs, sysSegs) = stubTranscription(
-            micText: "Agent speaking first",
-            sysText: "Customer responds"
-        )
-        DualSourceTranscriber.transcribeChunkFunc = { url, _, _, _, _, _, _ in
-            url.lastPathComponent.contains("mic") ? micSegs : sysSegs
+        try await dualSourceTranscriberMockLock.withLock {
+            // 4. Transcribe via DualSourceTranscriber with mocked ML backends.
+            let (micSegs, sysSegs) = stubTranscription(
+                micText: "Agent speaking first",
+                sysText: "Customer responds"
+            )
+            DualSourceTranscriber.transcribeChunkFunc = { url, _, _, _, _, _, _ in
+                url.lastPathComponent.contains("mic") ? micSegs : sysSegs
+            }
+            DualSourceTranscriber.ensureAudibleFunc = { _ in }
+            defer { resetDualSourceMocks() }
+
+            var cfg = AppConfig()
+            cfg.audio.selfLabel = "Agent"
+            cfg.audio.otherLabel = "Customer"
+
+            let segments = try await DualSourceTranscriber.transcribeDual(
+                mic: sessionDir.appendingPathComponent("audio.mic.caf"),
+                sys: sessionDir.appendingPathComponent("audio.sys.caf"),
+                timing: .init(
+                    micStartEpoch: timing.micStartEpoch,
+                    sysStartEpoch: timing.sysStartEpoch
+                ),
+                cfg: cfg,
+                progress: .init(mic: nil, sys: nil)
+            )
+
+            // 5. Verify interleaved output with correct labels.
+            #expect(segments.count == 2)
+            // Mic tagged as selfLabel, sys tagged as otherLabel.
+            let agentSegs = segments.filter { $0.speaker == "Agent" }
+            let customerSegs = segments.filter { $0.speaker == "Customer" }
+            #expect(agentSegs.count == 1)
+            #expect(customerSegs.count == 1)
+            #expect(agentSegs.first?.text == "Agent speaking first")
+            #expect(customerSegs.first?.text == "Customer responds")
+
+            // 6. Formatted transcript contains both speakers.
+            let formatted = TranscriptFormatter.formatDual(segments)
+            #expect(formatted.contains("Agent:"))
+            #expect(formatted.contains("Customer:"))
         }
-        DualSourceTranscriber.ensureAudibleFunc = { _ in }
-        defer { resetDualSourceMocks() }
-
-        var cfg = AppConfig()
-        cfg.audio.selfLabel = "Agent"
-        cfg.audio.otherLabel = "Customer"
-
-        let segments = try await DualSourceTranscriber.transcribeDual(
-            mic: sessionDir.appendingPathComponent("audio.mic.caf"),
-            sys: sessionDir.appendingPathComponent("audio.sys.caf"),
-            timing: .init(
-                micStartEpoch: timing.micStartEpoch,
-                sysStartEpoch: timing.sysStartEpoch
-            ),
-            cfg: cfg,
-            progress: .init(mic: nil, sys: nil)
-        )
-
-        // 5. Verify interleaved output with correct labels.
-        #expect(segments.count == 2)
-        // Mic tagged as selfLabel, sys tagged as otherLabel.
-        let agentSegs = segments.filter { $0.speaker == "Agent" }
-        let customerSegs = segments.filter { $0.speaker == "Customer" }
-        #expect(agentSegs.count == 1)
-        #expect(customerSegs.count == 1)
-        #expect(agentSegs.first?.text == "Agent speaking first")
-        #expect(customerSegs.first?.text == "Customer responds")
-
-        // 6. Formatted transcript contains both speakers.
-        let formatted = TranscriptFormatter.formatDual(segments)
-        #expect(formatted.contains("Agent:"))
-        #expect(formatted.contains("Customer:"))
     }
 
     @Test("Legacy session (no CAF sidecars) falls back to mixed-file transcription")
@@ -138,9 +136,7 @@ struct PipelineIntegrationTests {
         )
 
         let recorder = DualAudioRecorder(sessionDir: sessionDir)
-        let samples = (0..<4_800).map { i in
-            Float(sin(2.0 * .pi * 440 * Double(i) / 48_000)) * 0.3
-        }
+        let samples = sineSamples(frequency: 440, count: 4_800, amplitude: 0.3)
         try recorder.writeMic(makeBuffer(samples: samples, sampleRate: 48_000))
         try recorder.writeSys(makeBuffer(samples: samples, sampleRate: 48_000))
         let timing = await recorder.stop()
@@ -168,6 +164,17 @@ private func makeSessionDir() -> URL {
         .appendingPathComponent("pipeline_\(UUID().uuidString)")
 }
 
+private func sineSamples(
+    frequency: Double,
+    count: Int,
+    amplitude: Float,
+    sampleRate: Double = 48_000
+) -> [Float] {
+    (0..<count).map { index in
+        Float(sin(2.0 * .pi * frequency * Double(index) / sampleRate)) * amplitude
+    }
+}
+
 private func makeBuffer(samples: [Float], sampleRate: Double) throws -> AVAudioPCMBuffer {
     let format = try #require(AVAudioFormat(
         commonFormat: .pcmFormatFloat32,
@@ -181,8 +188,8 @@ private func makeBuffer(samples: [Float], sampleRate: Double) throws -> AVAudioP
     ))
     buffer.frameLength = AVAudioFrameCount(samples.count)
     let data = try #require(buffer.floatChannelData)
-    for (i, sample) in samples.enumerated() {
-        data[0][i] = sample
+    for (index, sample) in samples.enumerated() {
+        data[0][index] = sample
     }
     return buffer
 }
@@ -207,7 +214,9 @@ private func writeM4A(samples: [Float], at url: URL) throws {
     ))
     buffer.frameLength = AVAudioFrameCount(samples.count)
     let data = try #require(buffer.floatChannelData)
-    for (i, s) in samples.enumerated() { data[0][i] = s }
+    for (index, sample) in samples.enumerated() {
+        data[0][index] = sample
+    }
     try file.write(from: buffer)
 }
 

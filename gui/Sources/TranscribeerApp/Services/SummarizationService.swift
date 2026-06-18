@@ -1,6 +1,21 @@
 import Foundation
 import LLM
 
+/// Token counts returned alongside a streaming summary's final event.
+struct TokenUsage: Equatable, Sendable {
+    let inputTokens: Int
+    let outputTokens: Int
+}
+
+/// Events yielded by `SummarizationService.streamSummarize`. Text fragments
+/// arrive as `.textDelta`; the stream finishes with a single `.completed`
+/// carrying token usage when the provider reported it (some Ollama models
+/// don't, so it's optional).
+enum SummarizationStreamEvent: Sendable {
+    case textDelta(String)
+    case completed(usage: TokenUsage?)
+}
+
 /// Summarizes transcripts via OpenAI, Anthropic, Gemini (Vertex AI), or Ollama.
 enum SummarizationService {
     static let defaultPrompt = """
@@ -13,6 +28,17 @@ enum SummarizationService {
         - Open questions
 
         Respond in markdown.
+        """
+
+    /// System prompt for the one-sentence sidebar description. Kept short and
+    /// strict on format because the output is shown verbatim in the history
+    /// sidebar — markdown, quotes, or multi-line replies would look broken.
+    static let descriptionPrompt = """
+        Summarize the following meeting summary in exactly one sentence.
+        Reply with that single sentence and nothing else: no markdown, no \
+        headings, no bullets, no quotes, no prefixes like "Summary:". Use the \
+        same language as the input. Aim for 8\u{2013}20 words. Describe what \
+        the meeting was about and, if clear, its outcome.
         """
 
     /// Stream a summary as incremental text deltas. Consumers should concatenate
@@ -35,7 +61,7 @@ enum SummarizationService {
         model: String,
         ollamaHost: String = "http://localhost:11434",
         prompt: String? = nil,
-    ) async throws -> AsyncThrowingStream<String, Error> {
+    ) async throws -> AsyncThrowingStream<SummarizationStreamEvent, Error> {
         guard let kind = LLMBackend(rawValue: backend) else {
             throw SummarizationError.unknownBackend(backend)
         }
@@ -56,8 +82,13 @@ enum SummarizationService {
             let task = Task {
                 do {
                     for try await event in source {
-                        if case let .textDelta(fragment) = event, !fragment.isEmpty {
-                            continuation.yield(fragment)
+                        switch event {
+                        case .textDelta(let fragment) where !fragment.isEmpty:
+                            continuation.yield(.textDelta(fragment))
+                        case .completed(let response):
+                            continuation.yield(.completed(usage: tokenUsage(from: response)))
+                        default:
+                            break
                         }
                     }
                     continuation.finish()
@@ -69,14 +100,91 @@ enum SummarizationService {
         }
     }
 
+    /// Extract `TokenUsage` from an LLM `ConversationResponse`, handling both
+    /// the OpenAI (`prompt_tokens`/`completion_tokens`) and Anthropic
+    /// (`input_tokens`/`output_tokens`) shapes. Returns `nil` when the
+    /// provider didn't report usage (some Ollama builds).
+    private static func tokenUsage(
+        from response: LLM.ConversationResponse,
+    ) -> TokenUsage? {
+        let usage = response.rawResponse.usage
+        guard let input = usage.prompt_tokens ?? usage.input_tokens,
+              let output = usage.completion_tokens ?? usage.output_tokens
+        else { return nil }
+        return TokenUsage(inputTokens: input, outputTokens: output)
+    }
+
+    /// Generate a single-sentence description of a meeting from its summary.
+    ///
+    /// Runs as a small follow-up call after the main summary stream so it can
+    /// see the same content the user sees, without re-feeding the (potentially
+    /// long) transcript. Returns a sanitized, single-line string suitable for
+    /// the sidebar; throws on backend / API-key / network failures so callers
+    /// can decide whether to surface or swallow them.
+    static func generateDescription(
+        summary: String,
+        backend: String,
+        model: String,
+        ollamaHost: String = "http://localhost:11434",
+    ) async throws -> String {
+        let trimmed = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        let stream = try await streamSummarize(
+            transcript: trimmed,
+            backend: backend,
+            model: model,
+            ollamaHost: ollamaHost,
+            prompt: descriptionPrompt,
+        )
+        var accumulated = ""
+        for try await event in stream {
+            try Task.checkCancellation()
+            if case .textDelta(let fragment) = event {
+                accumulated += fragment
+            }
+        }
+        return sanitizeOneSentence(accumulated)
+    }
+
+    /// Collapse a model reply to a single clean sentence: strip outer quotes,
+    /// markdown markers, leading bullets / headings, and join wrapped lines
+    /// with a single space. Exposed `internal` so tests can pin the
+    /// behaviour without going through the LLM.
+    static func sanitizeOneSentence(_ raw: String) -> String {
+        let lines = raw
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        let joined = lines.joined(separator: " ")
+        let stripChars = CharacterSet(charactersIn: "\"'`*_ \t")
+        var result = joined.trimmingCharacters(in: stripChars)
+        // Drop a leading markdown heading marker (e.g. `# `, `## `) or bullet.
+        while let first = result.first, "#-*>".contains(first) {
+            result.removeFirst()
+            result = result.trimmingCharacters(in: stripChars)
+        }
+        // Drop a leading label like "Summary:" / "Description:" the model
+        // sometimes adds despite the prompt.
+        if let colon = result.firstIndex(of: ":"),
+           result.distance(from: result.startIndex, to: colon) <= 20,
+           result[..<colon].allSatisfy({ $0.isLetter || $0.isWhitespace }) {
+            result = String(result[result.index(after: colon)...])
+                .trimmingCharacters(in: stripChars)
+        }
+        return result.trimmingCharacters(in: stripChars)
+    }
+
     /// Load a prompt profile from ~/.transcribeer/prompts/<name>.md.
-    /// Returns nil if the file doesn't exist (caller falls back to the built-in
-    /// `defaultPrompt`). For `default`, an on-disk file is treated as a user
-    /// override of the built-in prompt.
+    ///
+    /// `nil` is treated as the `default` profile so callers don't have to
+    /// special-case the built-in name. Returns nil only when the resolved
+    /// profile has no on-disk file — in that case the caller falls back to
+    /// the built-in `defaultPrompt`. For `default`, an on-disk file is the
+    /// user's override of that built-in prompt and must be honoured.
     static func loadPromptProfile(_ name: String?) -> String? {
-        guard let name else { return nil }
+        let resolved = name ?? "default"
         let url = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".transcribeer/prompts/\(name).md")
+            .appendingPathComponent(".transcribeer/prompts/\(resolved).md")
         return try? String(contentsOf: url, encoding: .utf8)
     }
 

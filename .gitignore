@@ -3,6 +3,7 @@
 
 # Python
 __pycache__/
+transcribeer/__pycache__/
 *.pyc
 
 # Swift build artifacts

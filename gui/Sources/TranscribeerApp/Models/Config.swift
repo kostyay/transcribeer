@@ -58,6 +58,9 @@ struct AppConfig: Equatable {
         var aec: Bool = false
         var selfLabel: String = "You"
         var otherLabel: String = "Them"
+        /// Optional ffmpeg binary path used to compress raw CAF sidecars.
+        /// Empty means auto-detect from PATH / common Homebrew locations.
+        var ffmpegPath: String = ""
         var diarizeMicMultiuser: Bool = false
     }
 }
@@ -115,6 +118,7 @@ struct AudioSection: Decodable {
     var aec: Bool?
     var self_label: String?
     var other_label: String?
+    var ffmpeg_path: String?
     var diarize_mic_multiuser: Bool?
 }
 
@@ -210,6 +214,7 @@ enum ConfigManager {
         cfg.audio.aec = s.aec ?? cfg.audio.aec
         cfg.audio.selfLabel = s.self_label ?? cfg.audio.selfLabel
         cfg.audio.otherLabel = s.other_label ?? cfg.audio.otherLabel
+        cfg.audio.ffmpegPath = s.ffmpeg_path ?? cfg.audio.ffmpegPath
         cfg.audio.diarizeMicMultiuser = s.diarize_mic_multiuser ?? cfg.audio.diarizeMicMultiuser
     }
 
@@ -258,6 +263,7 @@ enum ConfigManager {
         aec = \(cfg.audio.aec)
         self_label = \(tomlString(cfg.audio.selfLabel))
         other_label = \(tomlString(cfg.audio.otherLabel))
+        ffmpeg_path = \(tomlString(cfg.audio.ffmpegPath))
         diarize_mic_multiuser = \(cfg.audio.diarizeMicMultiuser)
         """
         try? lines.write(to: configPath, atomically: true, encoding: .utf8)
