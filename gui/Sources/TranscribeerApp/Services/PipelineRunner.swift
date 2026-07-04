@@ -521,6 +521,7 @@ extension PipelineRunner {
                 config: cfg,
                 duration: Date().timeIntervalSince(startedAt),
             )
+            await compactSourceSidecars(in: session, ffmpegPath: cfg.audio.ffmpegPath)
             return CLIResult(ok: true, error: "")
         } catch is CancellationError {
             logger.info("re-transcribe cancelled")
@@ -547,6 +548,20 @@ extension PipelineRunner {
         SessionLogger(
             logPath: session.appendingPathComponent("run.log")
         ).log(message)
+    }
+
+    private func compactSourceSidecars(in session: URL, ffmpegPath: String) async {
+        let logger = SessionLogger(logPath: session.appendingPathComponent("run.log"))
+        let compression = await SourceSidecarCompressor.compressSession(
+            in: session,
+            ffmpegPath: ffmpegPath
+        )
+        logSidecarCompression(compression, logger: logger)
+
+        let cleanup = SessionManager.removeCaptureAudioSidecars(in: session)
+        if cleanup.bytesFreed > 0 {
+            logger.log("removed raw capture sidecars \(cleanup.bytesFreed) bytes")
+        }
     }
 
     /// Re-summarize a session from its transcript.
