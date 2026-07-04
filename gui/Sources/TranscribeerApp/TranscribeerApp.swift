@@ -204,11 +204,16 @@ struct TranscribeerApp: App {
     // MARK: - Lifecycle
 
     private func onFirstAppear() {
-        let trashed = SessionManager.gcAbandonedSessions(sessionsDir: config.expandedSessionsDir)
+        let sessionsDir = config.expandedSessionsDir
+        let ffmpegPath = config.audio.ffmpegPath
+        let trashed = SessionManager.gcAbandonedSessions(sessionsDir: sessionsDir)
         if !trashed.isEmpty {
             logger.info(
                 "gc: trashed \(trashed.count, privacy: .public) abandoned session(s) at launch",
             )
+        }
+        Task {
+            await maintainHistoricalAudioSidecars(sessionsDir: sessionsDir, ffmpegPath: ffmpegPath)
         }
         meetingDetector.start()
         // Refresh the chat-model price catalog in the background. The
@@ -239,6 +244,23 @@ struct TranscribeerApp: App {
         if meetingDetector.inMeeting {
             handleMeetingChange(inMeeting: true)
         }
+    }
+
+    private func maintainHistoricalAudioSidecars(sessionsDir: String, ffmpegPath: String) async {
+        let report = await SourceSidecarCompressor.maintainHistoricalSessions(
+            in: sessionsDir,
+            ffmpegPath: ffmpegPath
+        )
+        guard report.didWork else { return }
+        logger.info(
+            """
+            sidecar maintenance: scanned=\(report.sessionsScanned, privacy: .public) \
+            raw_sessions=\(report.sessionsWithRawSidecars, privacy: .public) \
+            compressed=\(report.compressedFiles, privacy: .public) \
+            removed=\(report.removedFiles, privacy: .public) \
+            freed=\(report.bytesFreed, privacy: .public) failures=\(report.failed.count, privacy: .public)
+            """
+        )
     }
 
     /// Observe `meetingDetector.inMeeting` independently of menu visibility.
